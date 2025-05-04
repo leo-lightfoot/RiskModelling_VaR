@@ -42,7 +42,7 @@ def clean_numeric_data(df, columns):
 def calculate_nav_and_returns(prices, start_value=100):
     """Calculate NAV and log returns from price series"""
     # Calculate daily returns
-    daily_returns = prices.pct_change()
+    daily_returns = prices.pct_change(fill_method=None)
     
     # Calculate log returns
     log_returns = np.log(prices / prices.shift(1))
@@ -82,8 +82,24 @@ def save_results(result, output_folder, filename):
         # Extract key series for plotting
         nav = result['NAV']
         
+        # For Forex and Fixed Income, only keep NAV and log return columns
+        if output_folder.startswith('Forex') or output_folder.startswith('Fixed_Income'):
+            # Identify NAV and log return columns
+            nav_cols = [col for col in output_df.columns if col.startswith('NAV_')]
+            log_return_cols = [col for col in output_df.columns if col.startswith('Log_Return_')]
+            keep_cols = nav_cols + log_return_cols
+            if 'Date' in output_df.columns:
+                keep_cols.insert(0, 'Date')
+            
+            # Filter the DataFrame to keep only necessary columns
+            output_df = output_df[keep_cols]
+        
         # Save to CSV
-        output_df.to_csv(f'{output_folder}/{filename}', index=True)
+        try:
+            output_df.to_csv(f'{output_folder}/{filename}', index=True)
+        except PermissionError:
+            print(f"Permission error when saving to {output_folder}/{filename} - file may be open in another application")
+            return output_df
         
         # Get the instrument name from the filename
         instrument_name = filename.split('.')[0]
@@ -92,6 +108,14 @@ def save_results(result, output_folder, filename):
         # Assume this is the old format with tuple of (nav, log_returns, additional_data, num_rollovers)
         nav, log_returns, additional_data, num_rollovers = result
         
+        # Ensure NAV series has a name (if not already set)
+        if nav.name is None:
+            nav.name = filename.split('.')[0]
+            
+        # Ensure log_returns series has a name (if not already set)
+        if hasattr(log_returns, 'name') and log_returns.name is None:
+            log_returns.name = nav.name
+        
         # Build output DataFrame
         output_df = pd.DataFrame({
             'Date': nav.index,
@@ -99,32 +123,39 @@ def save_results(result, output_folder, filename):
             f'Log_Return_{nav.name}': log_returns.values,
         })
         
-        # Add any additional data columns
-        if additional_data is not None:
+        # For non-Forex and non-Fixed Income instruments, add additional data columns
+        if additional_data is not None and not (output_folder.startswith('Forex') or output_folder.startswith('Fixed_Income')):
             for col_name, col_data in additional_data.items():
                 output_df[col_name] = col_data
         
         # Save to CSV
-        output_df.to_csv(f'{output_folder}/{filename}', index=False)
+        try:
+            output_df.to_csv(f'{output_folder}/{filename}', index=False)
+        except PermissionError:
+            print(f"Permission error when saving to {output_folder}/{filename} - file may be open in another application")
+            return output_df
         
         # Get the instrument name from the NAV series name
         instrument_name = nav.name
     
     # Plot NAV over time
-    plt.figure(figsize=(14, 8))
-    plt.plot(nav.index, nav, label=instrument_name, linewidth=2)
-    plt.title(f'NAV of {instrument_name} Over Time', fontsize=16)
-    plt.xlabel('Date', fontsize=14)
-    plt.ylabel('NAV (log scale)', fontsize=14)
-    plt.legend(fontsize=12)
-    plt.grid(True, which='both', ls='--')
-    plt.xticks(fontsize=12)
-    plt.yticks(fontsize=12)
-    plt.yscale('log')
-    date_form = DateFormatter("%Y-%m")
-    plt.gca().xaxis.set_major_formatter(date_form)
-    plt.savefig(f'{output_folder}/{filename.replace(".csv", "")}_nav.png', bbox_inches='tight', dpi=300)
-    plt.close()
+    try:
+        plt.figure(figsize=(14, 8))
+        plt.plot(nav.index, nav, label=instrument_name, linewidth=2)
+        plt.title(f'NAV of {instrument_name} Over Time', fontsize=16)
+        plt.xlabel('Date', fontsize=14)
+        plt.ylabel('NAV (log scale)', fontsize=14)
+        plt.legend(fontsize=12)
+        plt.grid(True, which='both', ls='--')
+        plt.xticks(fontsize=12)
+        plt.yticks(fontsize=12)
+        plt.yscale('log')
+        date_form = DateFormatter("%Y-%m")
+        plt.gca().xaxis.set_major_formatter(date_form)
+        plt.savefig(f'{output_folder}/{filename.replace(".csv", "")}_nav.png', bbox_inches='tight', dpi=300)
+        plt.close()
+    except Exception as e:
+        print(f"Error creating plot for {instrument_name}: {str(e)}")
     
     return output_df
 
@@ -321,6 +352,8 @@ def price_lqd_etf(data, output_folder='Fixed_Income/LQD_ETF'):
     
     # Calculate NAV and log returns
     nav, log_returns = calculate_nav_and_returns(data[lqd_column])
+    nav.name = 'LQD_ETF'  # Set name for the series
+    log_returns.name = 'LQD_ETF'  # Set name for consistency
     
     # Save results using standardized function
     output_df = save_results(
@@ -336,60 +369,163 @@ def price_10y_tips(data, output_folder='Fixed_Income/10_year_TIPS'):
     """Price 10-year TIPS and save results"""
     print("Pricing 10-year TIPS...")
     
-    # Identify the TIPS yield column - use Real_10Y_yield instead of 10Y_TIPS_yld
-    tips_column = 'Real_10Y_yield'
-    
-    # Clean the TIPS yield data
-    data = clean_numeric_data(data, [tips_column])
-    
-    # Convert yield from percentage to decimal
-    data['10y_tips_yield'] = data[tips_column] / 100
-    
-    # Bond pricing parameters
+    # TIPS pricing parameters
     NOTIONAL = 100
-    COUPON_RATE = 0.01  # 1% annual for TIPS
+    COUPON_RATE = 0.0125  # 1.25% annual
     FREQUENCY = 2  # Semiannual payments
     MATURITY = 10  # 10 years
     
-    # Calculate inflation adjustment (simplified - using CPI data if available)
-    if 'CPI' in data.columns:
-        data = clean_numeric_data(data, ['CPI'])
-        # Calculate cumulative inflation factor
-        data['inflation_factor'] = (1 + data['CPI'] / 100).cumprod()
-        data['inflation_factor'] = data['inflation_factor'] / data['inflation_factor'].iloc[0]
-    else:
-        # If no inflation data available, use a simplified model (e.g., 2% annual inflation)
-        days_since_start = [(date - data.index[0]).days for date in data.index]
-        data['inflation_factor'] = [1.02 ** (days / 365) for days in days_since_start]
+    # Identify the TIPS yield column
+    tips_column = 'Real_10Y_yield'
+    
+    # Clean the TIPS yield and CPI data
+    data = clean_numeric_data(data, [tips_column, 'CPI'])
+    
+    # Convert yield from percentage to decimal
+    data['Real_10Y_yield'] = data[tips_column] / 100
+    
+    # Convert annual inflation percentage to monthly rate
+    data['monthly_inflation'] = data['CPI'] / 12 / 100
+    data['monthly_inflation'] = data['monthly_inflation'].ffill()
     
     # Initialize variables for TIPS pricing
     data['tips_price'] = np.nan
     data['days_to_maturity'] = 0
     data['roll_date'] = False
+    data['inflation_factor'] = np.nan
     
-    def calculate_tips_price(yield_rate, coupon_rate, years_to_maturity, inflation_factor, frequency=2):
-        """Calculate TIPS price using real yield and inflation adjustment"""
-        # Adjust notional for inflation
-        adjusted_notional = NOTIONAL * inflation_factor
+    def calculate_tips_price(real_yield, coupon_rate, years_to_maturity, frequency=2, inflation_factor=1.0):
+        """
+        Calculate TIPS price using real yield and inflation adjustment
+        """
+        if years_to_maturity <= 0:
+            return NOTIONAL * inflation_factor
         
-        # Calculate real coupon payment (adjusted for inflation)
-        coupon_payment = (coupon_rate / frequency) * adjusted_notional
+        # Adjusted principal for inflation
+        adj_principal = NOTIONAL * inflation_factor
         
-        # Number of remaining coupon payments
-        periods = years_to_maturity * frequency
-        
-        # Discount rate for each period
-        period_yield = yield_rate / frequency
+        # Calculate payments
+        periods = int(years_to_maturity * frequency)
+        period_yield = real_yield / frequency
+        period_coupon = coupon_rate / frequency
+        coupon_payment = adj_principal * period_coupon
         
         # Present value of coupon payments
-        coupon_pv = coupon_payment * (1 - (1 + period_yield)**(-periods)) / period_yield
+        if abs(period_yield) < 1e-10:  # Handle zero yield case
+            coupon_pv = coupon_payment * periods
+        else:
+            coupon_pv = coupon_payment * (1 - (1 + period_yield)**(-periods)) / period_yield
         
-        # Present value of inflation-adjusted principal
-        principal_pv = adjusted_notional / (1 + period_yield)**periods
+        # Present value of principal
+        principal_pv = adj_principal / (1 + period_yield)**periods
         
         return coupon_pv + principal_pv
     
+    # Track rollover dates and inflation base
+    current_maturity = data.index[0] + pd.DateOffset(years=MATURITY)
+    start_date = data.index[0]
+    
     # Calculate TIPS prices with roll-over logic
+    for i in range(len(data)):
+        current_date = data.index[i]
+        
+        # Check if we need to roll over
+        if current_date >= current_maturity:
+            data.loc[current_date, 'roll_date'] = True
+            start_date = current_date  # Reset base date for inflation calculation
+            current_maturity = current_date + pd.DateOffset(years=MATURITY)
+        
+        # Calculate days to maturity
+        days_to_maturity = (current_maturity - current_date).days
+        data.loc[current_date, 'days_to_maturity'] = days_to_maturity
+        time_to_maturity = days_to_maturity / 365.0
+        
+        # Calculate inflation factor from issue date to current date
+        months_elapsed = (current_date.year - start_date.year) * 12 + (current_date.month - start_date.month)
+        relevant_dates = data.iloc[:i+1]
+        relevant_dates = relevant_dates[(relevant_dates.index >= start_date) & (relevant_dates.index <= current_date)]
+        
+        if len(relevant_dates) > 0:
+            avg_monthly_inflation = relevant_dates['monthly_inflation'].mean()
+            inflation_factor = (1 + avg_monthly_inflation) ** months_elapsed
+        else:
+            inflation_factor = 1.0
+        
+        data.loc[current_date, 'inflation_factor'] = inflation_factor
+        
+        # Calculate TIPS price
+        if not pd.isna(data.loc[current_date, 'Real_10Y_yield']):
+            data.loc[current_date, 'tips_price'] = calculate_tips_price(
+                data.loc[current_date, 'Real_10Y_yield'],
+                COUPON_RATE,
+                time_to_maturity,
+                FREQUENCY,
+                inflation_factor
+            )
+    
+    # Calculate returns
+    data['daily_returns'] = data['tips_price'].pct_change(fill_method=None)
+    data['log_returns'] = np.log(data['tips_price'] / data['tips_price'].shift(1))
+    
+    # Adjust returns on roll dates
+    for i in range(1, len(data)):
+        if data['roll_date'].iloc[i]:
+            # Keep same value on roll dates (no artificial jumps)
+            data.loc[data.index[i], 'daily_returns'] = 0
+    
+    # Compute NAV with roll-over adjustments
+    nav = pd.Series(index=data.index, name='10Y_TIPS')
+    nav.iloc[0] = NOTIONAL
+    for i in range(1, len(nav)):
+        if not pd.isna(data['daily_returns'].iloc[i]):
+            nav.iloc[i] = nav.iloc[i-1] * (1 + data['daily_returns'].iloc[i])
+        else:
+            nav.iloc[i] = nav.iloc[i-1]
+    
+    # Additional data for output
+    additional_data = {
+        'TIPS_Price': data['tips_price'].values,
+        'Days_to_Maturity': data['days_to_maturity'].values,
+        'Roll_Date': data['roll_date'].values,
+        'Yield': data['Real_10Y_yield'].values * 100,  # Convert back to percentage
+        'Inflation_Factor': data['inflation_factor'].values,
+        'CPI': data['CPI'].values
+    }
+    
+    # Save results
+    output_df = save_results(
+        result=(nav, data['log_returns'], additional_data, data['roll_date'].sum()),
+        output_folder=output_folder,
+        filename="10_year_tips_data.csv"
+    )
+    
+    print(f"10-year TIPS pricing complete. Number of roll-overs: {data['roll_date'].sum()}")
+    return output_df
+
+def price_1y_eur_zcb(data, output_folder='Fixed_Income/1_year_EUR_bond'):
+    """Price 1-year EUR Zero Coupon Bond and save results"""
+    print("Pricing 1-year EUR Zero Coupon Bond...")
+    
+    # Bond parameters
+    NOTIONAL = 100  # EUR
+    MATURITY = 1  # 1 year
+    
+    # Clean the 1-year EUR yield and FX data
+    data = clean_numeric_data(data, ['1_year_euro_yield_curve', 'fx_eurusd_rate'])
+    
+    # Convert yield from percentage to decimal
+    data['1_year_euro_yield_curve'] = data['1_year_euro_yield_curve'] / 100
+    
+    def calculate_zcb_price(yield_rate, years_to_maturity):
+        """Calculate zero coupon bond price using continuous compounding"""
+        return NOTIONAL * np.exp(-yield_rate * years_to_maturity)
+    
+    # Initialize variables for bond pricing
+    data['zcb_price_eur'] = np.nan
+    data['days_to_maturity'] = 0
+    data['roll_date'] = False
+    
+    # Calculate bond prices with roll-over logic
     current_maturity = data.index[0] + pd.DateOffset(years=MATURITY)
     for i in range(len(data)):
         current_date = data.index[i]
@@ -406,29 +542,148 @@ def price_10y_tips(data, output_folder='Fixed_Income/10_year_TIPS'):
         # Calculate time to maturity in years
         time_to_maturity = days_to_maturity / 365.0
         
-        # Calculate TIPS price
-        if not np.isnan(data.loc[current_date, '10y_tips_yield']):
-            data.loc[current_date, 'tips_price'] = calculate_tips_price(
-                data.loc[current_date, '10y_tips_yield'],
+        # Calculate bond price in EUR
+        if not np.isnan(data.loc[current_date, '1_year_euro_yield_curve']):
+            data.loc[current_date, 'zcb_price_eur'] = calculate_zcb_price(
+                data.loc[current_date, '1_year_euro_yield_curve'],
+                time_to_maturity
+            )
+    
+    # Calculate returns in EUR
+    data['daily_returns_eur'] = data['zcb_price_eur'].pct_change(fill_method=None)
+    data['log_returns_eur'] = np.log(data['zcb_price_eur'] / data['zcb_price_eur'].shift(1))
+    
+    # Adjust returns on roll dates to account for roll yield
+    for i in range(1, len(data)):
+        if data['roll_date'].iloc[i]:
+            # Calculate roll yield (difference between old and new bond)
+            roll_yield = (data['zcb_price_eur'].iloc[i] - data['zcb_price_eur'].iloc[i-1]) / data['zcb_price_eur'].iloc[i-1]
+            data.loc[data.index[i], 'daily_returns_eur'] = roll_yield
+    
+    # Compute NAV in EUR
+    nav_eur = pd.Series(index=data.index, name='1_year_eur_zcb')
+    nav_eur.iloc[0] = NOTIONAL
+    for i in range(1, len(nav_eur)):
+        if not np.isnan(data['daily_returns_eur'].iloc[i]):
+            nav_eur.iloc[i] = nav_eur.iloc[i-1] * (1 + data['daily_returns_eur'].iloc[i])
+        else:
+            nav_eur.iloc[i] = nav_eur.iloc[i-1]
+    
+    # Convert NAV to USD
+    nav_usd = pd.Series(index=data.index, name='1_year_EUR_ZCB')
+    nav_usd = nav_eur * data['fx_eurusd_rate']
+    
+    # Calculate USD returns
+    data['daily_returns_usd'] = nav_usd.pct_change(fill_method=None)
+    data['log_returns_usd'] = np.log(nav_usd / nav_usd.shift(1))
+    log_returns_usd = pd.Series(data['log_returns_usd'].values, index=data.index, name='1_year_EUR_ZCB')
+    
+    # Additional data for output
+    additional_data = {
+        'NAV_EUR': nav_eur.values,
+        'ZCB_Price_EUR': data['zcb_price_eur'].values,
+        'Days_to_Maturity': data['days_to_maturity'].values,
+        'Roll_Date': data['roll_date'].values,
+        'Yield': data['1_year_euro_yield_curve'].values * 100,  # Convert back to percentage
+        'EUR_USD_Rate': data['fx_eurusd_rate'].values
+    }
+    
+    # Save results
+    output_df = save_results(
+        result=(nav_usd, log_returns_usd, additional_data, data['roll_date'].sum()),
+        output_folder=output_folder,
+        filename="1_year_eur_zcb_data.csv"
+    )
+    
+    print(f"1-year EUR Zero Coupon Bond pricing complete. Number of roll-overs: {data['roll_date'].sum()}")
+    return output_df
+
+def price_high_yield_corp_debt(data, output_folder='Fixed_Income/High_Yield_CorpDebt'):
+    """Price High Yield Corporate Debt and save results"""
+    print("Pricing High Yield Corporate Debt...")
+    
+    # Bond parameters
+    NOTIONAL = 100  # USD
+    MATURITY = 5  # Typical high-yield bond fund has ~5 year effective duration
+    COUPON_RATE = 0.065  # 6.5% typical for high yield corporate bonds
+    FREQUENCY = 2  # Semiannual coupon payments
+    
+    # Clean the yield data
+    data = clean_numeric_data(data, ['10y_treasury_yield', 'high_yield_credit spread'])
+    
+    # Convert yield from percentage to decimal
+    data['10y_treasury_yield'] = data['10y_treasury_yield'] / 100
+    data['high_yield_credit spread'] = data['high_yield_credit spread'] / 100
+    
+    # Calculate high yield rate (treasury + high yield spread)
+    data['high_yield_rate'] = data['10y_treasury_yield'] + data['high_yield_credit spread']
+    
+    def calculate_bond_price(yield_rate, coupon_rate, years_to_maturity, frequency=2):
+        """Calculate bond price using the yield to maturity with coupon payments"""
+        if years_to_maturity <= 0 or np.isnan(yield_rate):
+            return np.nan
+            
+        coupon_payment = (coupon_rate / frequency) * NOTIONAL
+        periods = years_to_maturity * frequency
+        period_yield = yield_rate / frequency
+        
+        # Calculate present value of coupon payments
+        coupon_pv = coupon_payment * (1 - (1 + period_yield)**(-periods)) / period_yield if period_yield > 0 else coupon_payment * periods
+        
+        # Calculate present value of face value
+        face_value_pv = NOTIONAL / (1 + period_yield)**periods
+        
+        return coupon_pv + face_value_pv
+    
+    # Initialize variables for bond pricing
+    data['bond_price'] = np.nan
+    data['days_to_maturity'] = 0
+    data['roll_date'] = False
+    
+    # Calculate bond prices with monthly roll-over logic
+    current_maturity = data.index[0] + pd.DateOffset(months=1)  # Monthly roll-over
+    for i in range(len(data)):
+        current_date = data.index[i]
+        
+        # Check if we need to roll over (monthly)
+        if current_date >= current_maturity:
+            data.loc[current_date, 'roll_date'] = True
+            current_maturity = current_date + pd.DateOffset(months=1)
+        
+        # Calculate days to maturity for the 5-year bond
+        full_maturity = current_date + pd.DateOffset(years=MATURITY)
+        days_to_maturity = (full_maturity - current_date).days
+        data.loc[current_date, 'days_to_maturity'] = days_to_maturity
+        
+        # Calculate time to maturity in years
+        time_to_maturity = days_to_maturity / 365.0
+        
+        # Calculate bond price with coupon payments
+        if not np.isnan(data.loc[current_date, 'high_yield_rate']):
+            data.loc[current_date, 'bond_price'] = calculate_bond_price(
+                data.loc[current_date, 'high_yield_rate'],
                 COUPON_RATE,
                 time_to_maturity,
-                data.loc[current_date, 'inflation_factor'],
                 FREQUENCY
             )
     
     # Calculate returns
-    data['daily_returns'] = data['tips_price'].pct_change(fill_method=None)
-    data['log_returns'] = np.log(data['tips_price'] / data['tips_price'].shift(1))
+    data['daily_returns'] = data['bond_price'].pct_change(fill_method=None)
+    data['log_returns'] = np.log(data['bond_price'] / data['bond_price'].shift(1))
+    
+    # Add coupon accrual component to returns
+    daily_coupon_return = COUPON_RATE / 252  # Daily equivalent of annual coupon
+    data['daily_returns'] = data['daily_returns'] + daily_coupon_return
     
     # Adjust returns on roll dates
     for i in range(1, len(data)):
         if data['roll_date'].iloc[i]:
-            # Calculate roll yield
-            roll_yield = (data['tips_price'].iloc[i] - data['tips_price'].iloc[i-1]) / data['tips_price'].iloc[i-1]
-            data.loc[data.index[i], 'daily_returns'] = roll_yield
+            # Calculate roll yield (difference between old and new bond)
+            roll_yield = (data['bond_price'].iloc[i] - data['bond_price'].iloc[i-1]) / data['bond_price'].iloc[i-1]
+            data.loc[data.index[i], 'daily_returns'] = roll_yield + daily_coupon_return
     
     # Compute NAV
-    nav = pd.Series(index=data.index, name='10Y_TIPS')
+    nav = pd.Series(index=data.index, name='High_Yield_Corp_Debt')
     nav.iloc[0] = NOTIONAL
     for i in range(1, len(nav)):
         if not np.isnan(data['daily_returns'].iloc[i]):
@@ -436,54 +691,286 @@ def price_10y_tips(data, output_folder='Fixed_Income/10_year_TIPS'):
         else:
             nav.iloc[i] = nav.iloc[i-1]
     
+    # Create a named log_returns series
+    log_returns = pd.Series(data['log_returns'].values, index=data.index, name='High_Yield_Corp_Debt')
+    
     # Additional data for output
     additional_data = {
-        'TIPS_Price': data['tips_price'].values,
+        'Bond_Price': data['bond_price'].values,
         'Days_to_Maturity': data['days_to_maturity'].values,
         'Roll_Date': data['roll_date'].values,
-        'Real_Yield': data['10y_tips_yield'].values * 100,  # Convert back to percentage
-        'Inflation_Factor': data['inflation_factor'].values
+        'High_Yield_Rate': data['high_yield_rate'].values * 100,  # Convert back to percentage
+        'Treasury_Yield': data['10y_treasury_yield'].values * 100,
+        'Credit_Spread': data['high_yield_credit spread'].values * 100
     }
     
     # Save results
     output_df = save_results(
-        result=(nav, data['log_returns'], additional_data, data['roll_date'].sum()),
+        result=(nav, log_returns, additional_data, data['roll_date'].sum()),
         output_folder=output_folder,
-        filename="10_year_tips_data.csv"
+        filename="high_yield_corp_debt_data.csv"
     )
     
-    print(f"10-year TIPS pricing complete. Number of roll-overs: {data['roll_date'].sum()}")
+    print(f"High Yield Corporate Debt pricing complete. Number of roll-overs: {data['roll_date'].sum()}")
+    return output_df
+
+def price_5y_green_bond(data, output_folder='Fixed_Income/5year_corp_green_bond'):
+    """Price 5-year Green Bond and save results"""
+    print("Pricing 5-year Green Bond...")
+    
+    # Bond parameters
+    NOTIONAL = 100
+    COUPON_RATE = 0.025  # 2.5% annual
+    FREQUENCY = 1        # Annual payments
+    MATURITY = 5         # 5 years
+    GREENIUM = -0.002    # -20 bps spread
+    
+    # Clean the yield data
+    data = clean_numeric_data(data, ['5y_treasury_yield'])
+    
+    # Convert yield from percentage to decimal
+    data['5y_treasury_yield'] = data['5y_treasury_yield'] / 100
+    
+    def calculate_bond_price(yield_rate, coupon_rate, years_to_maturity, frequency=1):
+        """
+        Calculate bond price using yield to maturity
+        """
+        if np.isnan(yield_rate) or years_to_maturity <= 0:
+            return np.nan
+            
+        coupon_payment = (coupon_rate / frequency) * NOTIONAL
+        periods = int(np.round(years_to_maturity * frequency))
+        period_yield = yield_rate / frequency
+
+        # Present value of coupon payments
+        if period_yield == 0:
+            coupon_pv = coupon_payment * periods
+        else:
+            coupon_pv = coupon_payment * (1 - (1 + period_yield)**(-periods)) / period_yield
+
+        # Present value of face value
+        face_value_pv = NOTIONAL / (1 + period_yield)**periods
+
+        return coupon_pv + face_value_pv
+    
+    # Initialize variables for bond pricing
+    data['bond_price_green'] = np.nan
+    data['days_to_maturity_green'] = 0
+    data['roll_date_green'] = False
+    
+    # Calculate bond prices with roll-over logic
+    current_maturity = data.index[0] + pd.DateOffset(years=MATURITY)
+    for i in range(len(data)):
+        current_date = data.index[i]
+        
+        # Check if we need to roll over
+        if current_date >= current_maturity:
+            data.loc[current_date, 'roll_date_green'] = True
+            current_maturity = current_date + pd.DateOffset(years=MATURITY)
+        
+        # Calculate days to maturity
+        days_to_maturity = (current_maturity - current_date).days
+        data.loc[current_date, 'days_to_maturity_green'] = days_to_maturity
+        
+        # Calculate time to maturity in years
+        time_to_maturity = days_to_maturity / 365.0
+        
+        # Calculate effective yield (Treasury + greenium)
+        base_yield = data.loc[current_date, '5y_treasury_yield']
+        if not np.isnan(base_yield):
+            effective_yield = base_yield + GREENIUM
+            data.loc[current_date, 'bond_price_green'] = calculate_bond_price(
+                yield_rate=effective_yield,
+                coupon_rate=COUPON_RATE,
+                years_to_maturity=time_to_maturity,
+                frequency=FREQUENCY
+            )
+    
+    # Calculate returns
+    data['daily_returns_green'] = data['bond_price_green'].pct_change(fill_method=None)
+    data['log_returns_green'] = np.log(data['bond_price_green'] / data['bond_price_green'].shift(1))
+    
+    # Adjust returns on roll dates
+    for i in range(1, len(data)):
+        if data['roll_date_green'].iloc[i]:
+            # Calculate roll yield (difference between old and new bond)
+            roll_yield = (data['bond_price_green'].iloc[i] - data['bond_price_green'].iloc[i-1]) / data['bond_price_green'].iloc[i-1]
+            data.loc[data.index[i], 'daily_returns_green'] = roll_yield
+    
+    # Compute NAV
+    nav = pd.Series(index=data.index, name='Green_Bond')
+    nav.iloc[0] = NOTIONAL
+    for i in range(1, len(nav)):
+        if not np.isnan(data['daily_returns_green'].iloc[i]):
+            nav.iloc[i] = nav.iloc[i-1] * (1 + data['daily_returns_green'].iloc[i])
+        else:
+            nav.iloc[i] = nav.iloc[i-1]
+    
+    # Create a named log_returns series
+    log_returns = pd.Series(data['log_returns_green'].values, index=data.index, name='Green_Bond')
+    
+    # Additional data for output
+    additional_data = {
+        'Bond_Price': data['bond_price_green'].values,
+        'Days_to_Maturity': data['days_to_maturity_green'].values,
+        'Roll_Date': data['roll_date_green'].values,
+        'Yield_Treasury_5Y': data['5y_treasury_yield'].values * 100,  # Convert back to percentage
+        'Effective_Yield': (data['5y_treasury_yield'] + GREENIUM).values * 100
+    }
+    
+    # Save results
+    output_df = save_results(
+        result=(nav, log_returns, additional_data, data['roll_date_green'].sum()),
+        output_folder=output_folder,
+        filename="5y_green_bond_data.csv"
+    )
+    
+    print(f"5-year Green Bond pricing complete. Number of roll-overs: {data['roll_date_green'].sum()}")
+    return output_df
+
+def price_30y_revenue_bond(data, output_folder='Fixed_Income/Revenue_Bond'):
+    """Price 30-year Revenue Bond and save results"""
+    print("Pricing 30-year Revenue Bond...")
+    
+    # Bond parameters
+    NOTIONAL = 100
+    COUPON_RATE = 0.04  # 4% annual
+    FREQUENCY = 2  # Semiannual payments
+    MATURITY = 30  # 30 years
+    SPREAD = 0.008  # 80 bps spread
+    
+    # Clean the yield data
+    data = clean_numeric_data(data, ['30Y_treasury_yield'])
+    
+    # Convert yield from percentage to decimal
+    data['30Y_treasury_yield'] = data['30Y_treasury_yield'] / 100
+    
+    def calculate_bond_price(yield_rate, coupon_rate, years_to_maturity, frequency=2):
+        """
+        Calculate bond price using the yield to maturity
+        """
+        if np.isnan(yield_rate) or years_to_maturity <= 0:
+            return np.nan
+            
+        coupon_payment = (coupon_rate / frequency) * NOTIONAL
+        periods = years_to_maturity * frequency
+        period_yield = yield_rate / frequency
+
+        if period_yield == 0:
+            return coupon_payment * periods + NOTIONAL
+
+        coupon_pv = coupon_payment * (1 - (1 + period_yield) ** -periods) / period_yield
+        face_value_pv = NOTIONAL / (1 + period_yield) ** periods
+
+        return coupon_pv + face_value_pv
+    
+    # Initialize variables for bond pricing
+    data['rev_bond_price'] = np.nan
+    data['days_to_maturity'] = 0
+    data['roll_date'] = False
+    
+    # Calculate bond prices with roll-over logic
+    current_maturity = data.index[0] + pd.DateOffset(years=MATURITY)
+    for i in range(len(data)):
+        current_date = data.index[i]
+        
+        # Check if we need to roll over
+        if current_date >= current_maturity:
+            data.loc[current_date, 'roll_date'] = True
+            current_maturity = current_date + pd.DateOffset(years=MATURITY)
+        
+        # Calculate days to maturity
+        days_to_maturity = (current_maturity - current_date).days
+        data.loc[current_date, 'days_to_maturity'] = days_to_maturity
+        
+        # Calculate time to maturity in years
+        time_to_maturity = days_to_maturity / 365.0
+        
+        # Calculate effective yield (Treasury + spread)
+        treasury_yield = data.loc[current_date, '30Y_treasury_yield']
+        if not np.isnan(treasury_yield):
+            effective_yield = treasury_yield + SPREAD
+            data.loc[current_date, 'rev_bond_price'] = calculate_bond_price(
+                effective_yield,
+                COUPON_RATE,
+                time_to_maturity,
+                FREQUENCY
+            )
+    
+    # Calculate returns
+    data['rev_daily_returns'] = data['rev_bond_price'].pct_change(fill_method=None)
+    data['rev_log_returns'] = np.log(data['rev_bond_price'] / data['rev_bond_price'].shift(1))
+    
+    # Adjust returns on roll dates
+    for i in range(1, len(data)):
+        if data['roll_date'].iloc[i]:
+            # Calculate roll yield (difference between old and new bond)
+            roll_yield = (data['rev_bond_price'].iloc[i] - data['rev_bond_price'].iloc[i-1]) / data['rev_bond_price'].iloc[i-1]
+            data.loc[data.index[i], 'rev_daily_returns'] = roll_yield
+    
+    # Compute NAV
+    nav = pd.Series(index=data.index, name='Revenue_Bond')
+    nav.iloc[0] = NOTIONAL
+    for i in range(1, len(nav)):
+        if not np.isnan(data['rev_daily_returns'].iloc[i]):
+            nav.iloc[i] = nav.iloc[i-1] * (1 + data['rev_daily_returns'].iloc[i])
+        else:
+            nav.iloc[i] = nav.iloc[i-1]
+    
+    # Create a named log_returns series
+    log_returns = pd.Series(data['rev_log_returns'].values, index=data.index, name='Revenue_Bond')
+    
+    # Additional data for output
+    additional_data = {
+        'Bond_Price': data['rev_bond_price'].values,
+        'Days_to_Maturity': data['days_to_maturity'].values,
+        'Roll_Date': data['roll_date'].values,
+        'Effective_Yield': (data['30Y_treasury_yield'] + SPREAD).values * 100  # Convert back to percentage
+    }
+    
+    # Save results
+    output_df = save_results(
+        result=(nav, log_returns, additional_data, data['roll_date'].sum()),
+        output_folder=output_folder,
+        filename="30_year_revenue_bond_data.csv"
+    )
+    
+    print(f"30-year Revenue Bond pricing complete. Number of roll-overs: {data['roll_date'].sum()}")
     return output_df
 
 ###############################################################################
 #                          DERIVATIVES PRICING                                #
 ###############################################################################
 
-def price_futures_contract(data, spot_column, rate_column='fed_funds_rate', 
-                          expiry_func=None, storage_cost=0, convenience_yield=0,
-                          start_value=100, output_prefix='futures'):
-    """
-    Generic function to price futures contracts with consistent methodology
+def price_sp500_futures_1m(data, output_folder='Derivatives/1M_S&P_Futures'):
+    """Price 1-month S&P 500 futures contracts"""
+    print("Pricing S&P 500 Futures...")
     
-    Args:
-        data: DataFrame with market data
-        spot_column: Column name for the spot price
-        rate_column: Column name for the interest rate
-        expiry_func: Function that determines expiry dates
-        storage_cost: Annual storage cost rate
-        convenience_yield: Annual convenience yield rate
-        start_value: Initial NAV value
-        output_prefix: Prefix for output column names
+    # Futures pricing parameters
+    DIVIDEND_YIELD = 0.018  # 1.8% annual dividend yield
+    START_VALUE = 100
+    
+    # Function to get next expiry date
+    def get_next_expiry(date):
+        # S&P 500 futures typically expire on the third Friday of the contract month
+        # For simplicity, we'll use the 15th of each month
+        current_year = date.year
+        current_month = date.month
         
-    Returns:
-        DataFrame with pricing results
-    """
-    # Clean the spot and interest rate data
-    clean_cols = [spot_column, rate_column]
-    data = clean_numeric_data(data, clean_cols)
+        if current_month == 12:
+            next_month = 1
+            next_year = current_year + 1
+        else:
+            next_month = current_month + 1
+            next_year = current_year
+        
+        return datetime(next_year, next_month, 15)
     
-    # Convert interest rate from percentage to decimal
-    data[rate_column] = data[rate_column] / 100
+    # Clean the S&P 500 spot and Fed funds rate data
+    data = clean_numeric_data(data, ['sp500_index', 'fed_funds_rate'])
+    
+    # Convert Fed funds rate from percentage to decimal
+    data['fed_funds_rate'] = data['fed_funds_rate'] / 100
     
     # Initialize variables for roll-over logic
     data['days_to_expiry'] = 0
@@ -491,14 +978,14 @@ def price_futures_contract(data, spot_column, rate_column='fed_funds_rate',
     data['contract_price'] = np.nan
     
     # Calculate futures prices with roll-over logic
-    current_expiry = expiry_func(data.index[0])
+    current_expiry = get_next_expiry(data.index[0])
     for i in range(len(data)):
         current_date = data.index[i]
         
         # Check if we need to roll over
         if current_date >= current_expiry:
             data.loc[current_date, 'roll_date'] = True
-            current_expiry = expiry_func(current_date)
+            current_expiry = get_next_expiry(current_date)
         
         # Calculate days to expiry
         days_to_expiry = (current_expiry - current_date).days
@@ -507,15 +994,14 @@ def price_futures_contract(data, spot_column, rate_column='fed_funds_rate',
         # Calculate time to maturity in years
         time_to_maturity = days_to_expiry / 365.0
         
-        # Calculate futures price using the cost-of-carry model
-        # Futures = Spot * exp((r + storage - convenience_yield) * T)
-        if not np.isnan(data.loc[current_date, spot_column]) and not np.isnan(data.loc[current_date, rate_column]):
-            data.loc[current_date, 'contract_price'] = data.loc[current_date, spot_column] * np.exp(
-                (data.loc[current_date, rate_column] + storage_cost - convenience_yield) * time_to_maturity
+        # Calculate futures price
+        if not np.isnan(data.loc[current_date, 'sp500_index']) and not np.isnan(data.loc[current_date, 'fed_funds_rate']):
+            data.loc[current_date, 'contract_price'] = data.loc[current_date, 'sp500_index'] * np.exp(
+                (data.loc[current_date, 'fed_funds_rate'] - DIVIDEND_YIELD) * time_to_maturity
             )
     
     # Calculate returns with roll-over adjustment
-    data['daily_returns'] = data['contract_price'].pct_change(fill_method=None)
+    data['daily_returns'] = data['contract_price'].pct_change()
     data['log_returns'] = np.log(data['contract_price'] / data['contract_price'].shift(1))
     
     # Adjust returns on roll dates to account for roll yield
@@ -526,8 +1012,8 @@ def price_futures_contract(data, spot_column, rate_column='fed_funds_rate',
             data.loc[data.index[i], 'daily_returns'] = roll_yield
     
     # Compute NAV with roll-over adjustments
-    nav = pd.Series(index=data.index, name=f'{output_prefix}')
-    nav.iloc[0] = start_value
+    nav = pd.Series(index=data.index, name='sp500_futures_1m')
+    nav.iloc[0] = START_VALUE
     for i in range(1, len(nav)):
         if not np.isnan(data['daily_returns'].iloc[i]):
             nav.iloc[i] = nav.iloc[i-1] * (1 + data['daily_returns'].iloc[i])
@@ -541,429 +1027,683 @@ def price_futures_contract(data, spot_column, rate_column='fed_funds_rate',
         'Roll_Date': data['roll_date'].values
     }
     
-    return nav, data['log_returns'], additional_data, data['roll_date'].sum()
-
-def get_sp500_expiry(date):
-    """Calculate next expiry date for S&P 500 futures"""
-    year = date.year
-    month = date.month
-    
-    # S&P 500 futures expire on the third Friday of March, June, September, and December
-    # Determine which quarter we're in
-    if month < 3:
-        expiry_month = 3  # March
-    elif month < 6:
-        expiry_month = 6  # June
-    elif month < 9:
-        expiry_month = 9  # September
-    elif month < 12:
-        expiry_month = 12  # December
-    else:  # December, so next expiry is March of next year
-        expiry_month = 3
-        year += 1
-    
-    # Find the third Friday of the expiry month
-    first_day = datetime(year, expiry_month, 1)
-    # Find the first Friday
-    first_friday = first_day + timedelta(days=((4 - first_day.weekday()) % 7))
-    # Add two weeks to get the third Friday
-    third_friday = first_friday + timedelta(days=14)
-    
-    return third_friday
-
-def price_sp500_futures_1m(data):
-    """Price 1-month S&P 500 futures contracts"""
-    print("Pricing S&P 500 Futures...")
-    
-    # Use the generic futures pricing function
-    result = price_futures_contract(
-        data=data,
-        spot_column='sp500_index',
-        rate_column='fed_funds_rate',
-        expiry_func=get_sp500_expiry,
-        storage_cost=0,  # No storage cost for index futures
-        convenience_yield=0.005/12,  # Monthly convenience yield (dividend-like)
-        start_value=1000,
-        output_prefix='sp500_futures'
+    # Save results
+    output_df = save_results(
+        result=(nav, data['log_returns'], additional_data, data['roll_date'].sum()),
+        output_folder=output_folder,
+        filename="sp500_futures_1m.csv"
     )
     
-    # Save results
-    save_results(result, 'Derivatives/1M_S&P_Futures', 'sp500_futures.csv')
-    
-    return result
+    print(f"S&P 500 Futures pricing complete. Number of roll-overs: {data['roll_date'].sum()}")
+    return (nav, data['log_returns'], additional_data, data['roll_date'].sum())
 
-def get_vix_expiry(date):
-    """Calculate next expiry date for VIX futures"""
-    year = date.year
-    month = date.month
-    
-    # VIX futures expire on the Wednesday that is 30 days prior to the third Friday
-    # of the calendar month immediately following the month in which the contract expires
-    
-    # First, determine the next month
-    if month == 12:
-        next_month = 1
-        next_year = year + 1
-    else:
-        next_month = month + 1
-        next_year = year
-    
-    # Find the third Friday of the next month
-    first_day = datetime(next_year, next_month, 1)
-    # Find the first Friday
-    first_friday = first_day + timedelta(days=((4 - first_day.weekday()) % 7))
-    # Add two weeks to get the third Friday
-    third_friday = first_friday + timedelta(days=14)
-    
-    # Go back 30 days to get settlement date (nearest Wednesday)
-    expiry = third_friday - timedelta(days=30)
-    # Adjust to Wednesday (3 is Wednesday)
-    days_to_add = (3 - expiry.weekday()) % 7
-    expiry = expiry + timedelta(days=days_to_add)
-    
-    return expiry
-
-def price_vix_futures(data):
-    """Price VIX futures contracts"""
+def price_vix_futures(data, output_folder='Derivatives/VIX_FrontMonth_futures'):
+    """Price VIX futures contracts using a mean-reverting model"""
     print("Pricing VIX Futures...")
     
-    # Use the generic futures pricing function with VIX-specific parameters
-    result = price_futures_contract(
-        data=data,
-        spot_column='vix_index',
-        rate_column='fed_funds_rate',
-        expiry_func=get_vix_expiry,
-        storage_cost=0,  # No storage cost for volatility index
-        convenience_yield=0,  # No convenience yield for VIX
-        start_value=1000,
-        output_prefix='vix_futures'
-    )
+    # Start value for NAV
+    START_VALUE = 100
+    
+    # Clean the VIX data
+    data = clean_numeric_data(data, ['vix_index_level'])
+    
+    # Calculate 30-day moving average (target mean for mean reversion)
+    vix_mean = data['vix_index_level'].rolling(window=30).mean()
+    
+    # Set parameters
+    theta = 0.2           # Speed of mean reversion
+    sigma = data['vix_index_level'].pct_change().std() * data['vix_index_level'].mean()
+    contract_days = 21    # Approx 1 month (trading days)
+    initial_price = data['vix_index_level'].iloc[0]
+    
+    # Initialize simulation
+    vix_futures_price = []
+    current_price = initial_price
+    
+    for i in range(len(data)):
+        if i < 30:
+            # Not enough history for moving average
+            vix_futures_price.append(np.nan)
+            continue
+        
+        # Start of a new future contract?
+        if (i - 30) % contract_days == 0:
+            current_price = data['vix_index_level'].iloc[i]  # Assume it realizes to spot
+            days_left = contract_days
+        
+        # Get long-term mean from moving average
+        long_term_mean = vix_mean.iloc[i]
+        
+        # Mean-reverting update
+        shock = sigma * np.random.normal()
+        current_price += theta * (long_term_mean - current_price) + shock
+        vix_futures_price.append(current_price)
+    
+    # Create futures price series
+    data['contract_price'] = pd.Series(vix_futures_price, index=data.index)
+    
+    # Calculate returns with roll-over adjustment
+    data['daily_returns'] = data['contract_price'].pct_change()
+    data['log_returns'] = np.log(data['contract_price'] / data['contract_price'].shift(1))
+    
+    # Identify roll dates (every contract_days days after initial 30 days)
+    data['roll_date'] = False
+    for i in range(30, len(data), contract_days):
+        if i < len(data):
+            data.iloc[i, data.columns.get_loc('roll_date')] = True
+    
+    # Calculate days to expiry
+    data['days_to_expiry'] = 0
+    for i in range(len(data)):
+        if i < 30:
+            data.iloc[i, data.columns.get_loc('days_to_expiry')] = np.nan
+            continue
+        
+        # Calculate how many days since the last roll date
+        days_since_roll = (i - 30) % contract_days
+        data.iloc[i, data.columns.get_loc('days_to_expiry')] = contract_days - days_since_roll
+    
+    # Compute NAV
+    nav = pd.Series(index=data.index, name='vix_futures')
+    nav.iloc[0] = START_VALUE
+    for i in range(1, len(nav)):
+        if not np.isnan(data['daily_returns'].iloc[i]):
+            nav.iloc[i] = nav.iloc[i-1] * (1 + data['daily_returns'].iloc[i])
+        else:
+            nav.iloc[i] = nav.iloc[i-1]
+    
+    # Additional data for output
+    additional_data = {
+        'Contract_Price': data['contract_price'].values,
+        'VIX_Spot': data['vix_index_level'].values,
+        'Days_to_Expiry': data['days_to_expiry'].values,
+        'Roll_Date': data['roll_date'].values
+    }
     
     # Save results
-    save_results(result, 'Derivatives/VIX_FrontMonth_futures', 'vix_futures.csv')
+    direct_output_df = pd.DataFrame({
+        'Date': nav.index,
+        'NAV_VIX_Futures_1M': nav.values,
+        'Log_Return_VIX_Futures_1M': data['log_returns'].values
+    })
+    direct_output_df.to_csv(f'{output_folder}/vix_futures_data.csv', index=False)
     
-    return result
+    print(f"VIX Futures pricing complete. Number of roll-overs: {data['roll_date'].sum()}")
+    return (nav, data['log_returns'], additional_data, data['roll_date'].sum())
 
-def get_crude_oil_expiry(date):
-    """Calculate next expiry date for crude oil futures"""
-    year = date.year
-    month = date.month
-    
-    # Move to next month for expiry
-    if month == 12:
-        year += 1
-        month = 1
-    else:
-        month += 1
-    
-    # Crude oil futures expire on the 20th of each month
-    expiry = datetime(year, month, 20)
-    
-    # Adjust for weekends
-    while expiry.weekday() >= 5:  # 5 is Saturday, 6 is Sunday
-        expiry = expiry - timedelta(days=1)
-    
-    return expiry
-
-def price_crude_oil_futures(data):
+def price_crude_oil_futures(data, output_folder='Derivatives/1M_Crude_Oil_Futures'):
     """Price 1-month crude oil futures contracts"""
     print("Pricing Crude Oil Futures...")
     
-    # Use the generic futures pricing function
-    result = price_futures_contract(
-        data=data,
-        spot_column='crude_oil_wti_spot',
-        rate_column='fed_funds_rate',
-        expiry_func=get_crude_oil_expiry,
-        storage_cost=0.02/12,  # Monthly storage cost as fraction of spot
-        convenience_yield=0.01/12,  # Monthly convenience yield
-        start_value=1000,
-        output_prefix='crude_oil_futures'
-    )
+    # Futures pricing parameters
+    STORAGE_COST = 0.02/12  # Monthly storage cost (2% annual)
+    CONVENIENCE_YIELD = 0.01/12  # Monthly convenience yield (1% annual)
+    START_VALUE = 100
+    
+    # Function to get next expiry date for crude oil futures
+    def get_next_expiry(date):
+        # Crude oil futures typically expire around the 20th of each month
+        current_year = date.year
+        current_month = date.month
+        
+        if current_month == 12:
+            next_month = 1
+            next_year = current_year + 1
+        else:
+            next_month = current_month + 1
+            next_year = current_year
+        
+        return datetime(next_year, next_month, 20)
+    
+    # Clean the crude oil spot and interest rate data
+    data = clean_numeric_data(data, ['crude_oil_wti_spot', 'fed_funds_rate'])
+    
+    # Convert interest rate from percentage to decimal
+    data['fed_funds_rate'] = data['fed_funds_rate'] / 100
+    
+    # Initialize variables for roll-over logic
+    data['days_to_expiry'] = 0
+    data['roll_date'] = False
+    data['contract_price'] = np.nan
+    
+    # Calculate futures prices with roll-over logic
+    current_expiry = get_next_expiry(data.index[0])
+    for i in range(len(data)):
+        current_date = data.index[i]
+        
+        # Check if we need to roll over
+        if current_date >= current_expiry:
+            data.loc[current_date, 'roll_date'] = True
+            current_expiry = get_next_expiry(current_date)
+        
+        # Calculate days to expiry
+        days_to_expiry = (current_expiry - current_date).days
+        data.loc[current_date, 'days_to_expiry'] = days_to_expiry
+        
+        # Calculate time to maturity in years
+        time_to_maturity = days_to_expiry / 365.0
+        
+        # Calculate futures price using the cost-of-carry model
+        if not np.isnan(data.loc[current_date, 'crude_oil_wti_spot']) and not np.isnan(data.loc[current_date, 'fed_funds_rate']):
+            data.loc[current_date, 'contract_price'] = data.loc[current_date, 'crude_oil_wti_spot'] * np.exp(
+                (data.loc[current_date, 'fed_funds_rate'] + STORAGE_COST - CONVENIENCE_YIELD) * time_to_maturity
+            )
+    
+    # Calculate returns with roll-over adjustment
+    data['daily_returns'] = data['contract_price'].pct_change()
+    data['log_returns'] = np.log(data['contract_price'] / data['contract_price'].shift(1))
+    
+    # Adjust returns on roll dates
+    for i in range(1, len(data)):
+        if data['roll_date'].iloc[i]:
+            # Calculate roll yield (difference between old and new contract)
+            roll_yield = (data['contract_price'].iloc[i] - data['contract_price'].iloc[i-1]) / data['contract_price'].iloc[i-1]
+            data.loc[data.index[i], 'daily_returns'] = roll_yield
+    
+    # Compute NAV
+    nav = pd.Series(index=data.index, name='crude_oil_futures')
+    nav.iloc[0] = START_VALUE
+    for i in range(1, len(nav)):
+        if not np.isnan(data['daily_returns'].iloc[i]):
+            nav.iloc[i] = nav.iloc[i-1] * (1 + data['daily_returns'].iloc[i])
+        else:
+            nav.iloc[i] = nav.iloc[i-1]
+    
+    # Additional data for output
+    additional_data = {
+        'Contract_Price': data['contract_price'].values,
+        'Spot_Price': data['crude_oil_wti_spot'].values,
+        'Days_to_Expiry': data['days_to_expiry'].values,
+        'Roll_Date': data['roll_date'].values
+    }
     
     # Save results
-    save_results(result, 'Derivatives/1M_Crude_Oil_Futures', 'crude_oil_futures.csv')
+    output_df = save_results(
+        result=(nav, data['log_returns'], additional_data, data['roll_date'].sum()),
+        output_folder=output_folder,
+        filename="crude_oil_futures.csv"
+    )
     
-    return result
+    print(f"Crude Oil Futures pricing complete. Number of roll-overs: {data['roll_date'].sum()}")
+    return (nav, data['log_returns'], additional_data, data['roll_date'].sum())
 
-def get_gold_expiry(date):
-    """Calculate next expiry date for gold futures"""
-    year = date.year
-    month = date.month
-    
-    # Gold futures expire quarterly (Mar, Jun, Sep, Dec)
-    if month < 3:
-        expiry_month = 3
-    elif month < 6:
-        expiry_month = 6
-    elif month < 9:
-        expiry_month = 9
-    elif month < 12:
-        expiry_month = 12
-    else:  # If it's December, go to next year March
-        expiry_month = 3
-        year += 1
-    
-    # Gold futures expire on the third last business day of the month
-    last_day = calendar.monthrange(year, expiry_month)[1]
-    expiry = datetime(year, expiry_month, last_day)
-    
-    # Count back business days
-    business_days_back = 0
-    while business_days_back < 3:
-        expiry = expiry - timedelta(days=1)
-        if expiry.weekday() < 5:  # Not weekend
-            business_days_back += 1
-    
-    return expiry
-
-def price_gold_futures(data):
+def price_gold_futures(data, output_folder='Derivatives/3M_Gold_Futures'):
     """Price 3-month gold futures contracts"""
     print("Pricing Gold Futures...")
     
-    # Use the generic futures pricing function
-    result = price_futures_contract(
-        data=data,
-        spot_column='gold_spot_price',
-        rate_column='fed_funds_rate',
-        expiry_func=get_gold_expiry,
-        storage_cost=0.01/4,  # Quarterly storage cost as fraction of spot
-        convenience_yield=0.005/4,  # Quarterly convenience yield
-        start_value=1000,
-        output_prefix='gold_futures'
-    )
+    # Futures pricing parameters
+    STORAGE_COST = 0.01/4  # Quarterly storage cost (1% annual)
+    CONVENIENCE_YIELD = 0  # No convenience yield for gold
+    START_VALUE = 100
+    
+    # Function to get next expiry date for gold futures
+    def get_next_expiry(date):
+        # Gold futures typically expire on a quarterly cycle (Feb, Apr, Jun, Aug, Oct, Dec)
+        # For simplicity, we'll use a 3-month cycle from the start date
+        current_month = date.month
+        current_year = date.year
+        
+        # Calculate next quarter month
+        next_month = ((current_month - 1 + 3) % 12) + 1
+        next_year = current_year + (1 if next_month < current_month else 0)
+        
+        return datetime(next_year, next_month, 15)  # Mid-month approximation
+    
+    # Clean the gold spot and interest rate data
+    data = clean_numeric_data(data, ['gold_spot_price', 'fed_funds_rate'])
+    
+    # Convert interest rate from percentage to decimal
+    data['fed_funds_rate'] = data['fed_funds_rate'] / 100
+    
+    # Initialize variables for roll-over logic
+    data['days_to_expiry'] = 0
+    data['roll_date'] = False
+    data['contract_price'] = np.nan
+    
+    # Calculate futures prices with roll-over logic
+    current_expiry = get_next_expiry(data.index[0])
+    for i in range(len(data)):
+        current_date = data.index[i]
+        
+        # Check if we need to roll over
+        if current_date >= current_expiry:
+            data.loc[current_date, 'roll_date'] = True
+            current_expiry = get_next_expiry(current_date)
+        
+        # Calculate days to expiry
+        days_to_expiry = (current_expiry - current_date).days
+        data.loc[current_date, 'days_to_expiry'] = days_to_expiry
+        
+        # Calculate time to maturity in years
+        time_to_maturity = days_to_expiry / 365.0
+        
+        # Calculate futures price using the cost-of-carry model
+        if not np.isnan(data.loc[current_date, 'gold_spot_price']) and not np.isnan(data.loc[current_date, 'fed_funds_rate']):
+            data.loc[current_date, 'contract_price'] = data.loc[current_date, 'gold_spot_price'] * np.exp(
+                (data.loc[current_date, 'fed_funds_rate'] + STORAGE_COST - CONVENIENCE_YIELD) * time_to_maturity
+            )
+    
+    # Calculate returns with roll-over adjustment
+    data['daily_returns'] = data['contract_price'].pct_change()
+    data['log_returns'] = np.log(data['contract_price'] / data['contract_price'].shift(1))
+    
+    # Adjust returns on roll dates
+    for i in range(1, len(data)):
+        if data['roll_date'].iloc[i]:
+            # Calculate roll yield (difference between old and new contract)
+            roll_yield = (data['contract_price'].iloc[i] - data['contract_price'].iloc[i-1]) / data['contract_price'].iloc[i-1]
+            data.loc[data.index[i], 'daily_returns'] = roll_yield
+    
+    # Compute NAV
+    nav = pd.Series(index=data.index, name='gold_futures')
+    nav.iloc[0] = START_VALUE
+    for i in range(1, len(nav)):
+        if not np.isnan(data['daily_returns'].iloc[i]):
+            nav.iloc[i] = nav.iloc[i-1] * (1 + data['daily_returns'].iloc[i])
+        else:
+            nav.iloc[i] = nav.iloc[i-1]
+    
+    # Additional data for output
+    additional_data = {
+        'Contract_Price': data['contract_price'].values,
+        'Spot_Price': data['gold_spot_price'].values,
+        'Days_to_Expiry': data['days_to_expiry'].values,
+        'Roll_Date': data['roll_date'].values
+    }
     
     # Save results
-    save_results(result, 'Derivatives/3M_Gold_Futures', 'gold_futures.csv')
+    output_df = save_results(
+        result=(nav, data['log_returns'], additional_data, data['roll_date'].sum()),
+        output_folder=output_folder,
+        filename="gold_futures.csv"
+    )
     
-    return result
+    print(f"Gold Futures pricing complete. Number of roll-overs: {data['roll_date'].sum()}")
+    return (nav, data['log_returns'], additional_data, data['roll_date'].sum())
 
-def get_soybean_expiry(date):
-    """Calculate next expiry date for soybean futures"""
-    year = date.year
-    month = date.month
-    
-    # Soybean futures typically have 6-month expirations
-    # Move forward 6 months
-    expiry_month = ((month - 1 + 6) % 12) + 1
-    expiry_year = year + ((month + 6) > 12)
-    
-    # Soybean futures typically expire on the 15th of the expiry month
-    expiry = datetime(expiry_year, expiry_month, 15)
-    
-    # Adjust for weekends
-    while expiry.weekday() >= 5:  # 5 is Saturday, 6 is Sunday
-        expiry = expiry + timedelta(days=1)
-    
-    return expiry
-
-def price_soybean_futures(data):
+def price_soybean_futures(data, output_folder='Derivatives/6M_Soybean_Futures'):
     """Price 6-month soybean futures contracts"""
     print("Pricing Soybean Futures...")
     
-    # Use the generic futures pricing function
-    result = price_futures_contract(
-        data=data,
-        spot_column='soybean_spot_usd',
-        rate_column='fed_funds_rate',
-        expiry_func=get_soybean_expiry,
-        storage_cost=0.03/2,  # Semi-annual storage cost as fraction of spot
-        convenience_yield=0.02/2,  # Semi-annual convenience yield
-        start_value=1000,
-        output_prefix='soybean_futures'
-    )
+    # Futures pricing parameters
+    STORAGE_COST = 0.03/2  # Semi-annual storage cost (3% annual)
+    CONVENIENCE_YIELD = 0.02/2  # Semi-annual convenience yield (2% annual)
+    START_VALUE = 100
+    
+    # Function to get next expiry date for soybean futures
+    def get_next_expiry(date):
+        # Soybean futures typically expire on a specific schedule
+        # For simplicity, we'll use a 6-month cycle from the start date
+        current_month = date.month
+        current_year = date.year
+        
+        # Calculate next 6-month point
+        next_month = ((current_month - 1 + 6) % 12) + 1
+        next_year = current_year + (1 if next_month < current_month else 0)
+        
+        return datetime(next_year, next_month, 15)  # Mid-month approximation
+    
+    # Clean the soybean spot and interest rate data
+    data = clean_numeric_data(data, ['soybean_spot_usd', 'fed_funds_rate'])
+    
+    # Convert interest rate from percentage to decimal
+    data['fed_funds_rate'] = data['fed_funds_rate'] / 100
+    
+    # Initialize variables for roll-over logic
+    data['days_to_expiry'] = 0
+    data['roll_date'] = False
+    data['contract_price'] = np.nan
+    
+    # Calculate futures prices with roll-over logic
+    current_expiry = get_next_expiry(data.index[0])
+    for i in range(len(data)):
+        current_date = data.index[i]
+        
+        # Check if we need to roll over
+        if current_date >= current_expiry:
+            data.loc[current_date, 'roll_date'] = True
+            current_expiry = get_next_expiry(current_date)
+        
+        # Calculate days to expiry
+        days_to_expiry = (current_expiry - current_date).days
+        data.loc[current_date, 'days_to_expiry'] = days_to_expiry
+        
+        # Calculate time to maturity in years
+        time_to_maturity = days_to_expiry / 365.0
+        
+        # Calculate futures price using the cost-of-carry model
+        if not np.isnan(data.loc[current_date, 'soybean_spot_usd']) and not np.isnan(data.loc[current_date, 'fed_funds_rate']):
+            data.loc[current_date, 'contract_price'] = data.loc[current_date, 'soybean_spot_usd'] * np.exp(
+                (data.loc[current_date, 'fed_funds_rate'] + STORAGE_COST - CONVENIENCE_YIELD) * time_to_maturity
+            )
+    
+    # Calculate returns with roll-over adjustment
+    data['daily_returns'] = data['contract_price'].pct_change()
+    data['log_returns'] = np.log(data['contract_price'] / data['contract_price'].shift(1))
+    
+    # Adjust returns on roll dates
+    for i in range(1, len(data)):
+        if data['roll_date'].iloc[i]:
+            # Calculate roll yield (difference between old and new contract)
+            roll_yield = (data['contract_price'].iloc[i] - data['contract_price'].iloc[i-1]) / data['contract_price'].iloc[i-1]
+            data.loc[data.index[i], 'daily_returns'] = roll_yield
+    
+    # Compute NAV
+    nav = pd.Series(index=data.index, name='soybean_futures')
+    nav.iloc[0] = START_VALUE
+    for i in range(1, len(nav)):
+        if not np.isnan(data['daily_returns'].iloc[i]):
+            nav.iloc[i] = nav.iloc[i-1] * (1 + data['daily_returns'].iloc[i])
+        else:
+            nav.iloc[i] = nav.iloc[i-1]
+    
+    # Additional data for output
+    additional_data = {
+        'Contract_Price': data['contract_price'].values,
+        'Spot_Price': data['soybean_spot_usd'].values,
+        'Days_to_Expiry': data['days_to_expiry'].values,
+        'Roll_Date': data['roll_date'].values
+    }
     
     # Save results
-    save_results(result, 'Derivatives/6M_Soybean_Futures', 'soybean_futures.csv')
+    output_df = save_results(
+        result=(nav, data['log_returns'], additional_data, data['roll_date'].sum()),
+        output_folder=output_folder,
+        filename="soybean_futures.csv"
+    )
     
-    return result
+    print(f"Soybean Futures pricing complete. Number of roll-overs: {data['roll_date'].sum()}")
+    return (nav, data['log_returns'], additional_data, data['roll_date'].sum())
 
 ###############################################################################
 #                              FOREX PRICING                                  #
 ###############################################################################
 
-def price_forward_contract(data, base_column, domestic_rate_column, foreign_rate_column=None, 
-                       expiry_func=None, tenor_days=180, start_value=1000, output_prefix='forward'):
-    """Generic function to price forward contracts
-    
-    Args:
-        data: DataFrame with market data
-        base_column: Column name for the base rate (e.g., spot exchange rate)
-        domestic_rate_column: Column name for domestic interest rate
-        foreign_rate_column: Column name for foreign interest rate (None for non-FX forwards)
-        expiry_func: Function to calculate expiry date (optional)
-        tenor_days: Fixed tenor in days (used if expiry_func is None)
-        start_value: Initial value for NAV calculation
-        output_prefix: Prefix for output columns
-        
-    Returns:
-        DataFrame with pricing results
-    """
-    print(f"Pricing {output_prefix} forward contract...")
-    
-    # Clean the input data
-    columns_to_clean = [base_column, domestic_rate_column]
-    if foreign_rate_column:
-        columns_to_clean.append(foreign_rate_column)
-    
-    data_clean = clean_numeric_data(data, columns_to_clean)
-    
-    # Initialize result dataframe
-    result = pd.DataFrame(index=data_clean.index)
-    result['forward_price'] = np.nan
-    result['days_to_expiry'] = np.nan
-    result['roll_date'] = False
-    
-    # If expiry_func is not provided, use fixed tenor
-    if expiry_func is None:
-        def default_expiry_func(date):
-            return date + timedelta(days=tenor_days)
-        expiry_func = default_expiry_func
-    
-    # Calculate forwards with roll-over logic
-    current_expiry = expiry_func(data_clean.index[0])
-    
-    for i, date in enumerate(data_clean.index):
-        # Check if we need to roll over
-        if date >= current_expiry:
-            result.loc[date, 'roll_date'] = True
-            current_expiry = expiry_func(date)
-        
-        # Calculate days to expiry
-        days_to_expiry = (current_expiry - date).days
-        result.loc[date, 'days_to_expiry'] = days_to_expiry
-        
-        # Calculate time to maturity in years
-        time_to_maturity = days_to_expiry / 365.0
-        
-        # Forward pricing formula depends on the type
-        if foreign_rate_column:  # FX forward
-            # Convert rates from percentage to decimal if needed
-            dom_rate = data_clean.loc[date, domestic_rate_column]
-            for_rate = data_clean.loc[date, foreign_rate_column]
-            
-            # Use percentage rates (convert if they appear to be in decimal form)
-            if dom_rate < 0.2:  # Assuming rates are not over 20%
-                dom_rate *= 100
-            if for_rate < 0.2:
-                for_rate *= 100
-                
-            # Convert to decimal for calculation
-            dom_rate = dom_rate / 100  
-            for_rate = for_rate / 100
-            
-            # FX Forward = Spot * (1 + r_domestic)^T / (1 + r_foreign)^T
-            spot = data_clean.loc[date, base_column]
-            if not np.isnan(spot) and not np.isnan(dom_rate) and not np.isnan(for_rate):
-                result.loc[date, 'forward_price'] = spot * (
-                    (1 + dom_rate) ** time_to_maturity / 
-                    (1 + for_rate) ** time_to_maturity
-                )
-        else:  # Non-FX forward (commodity, etc.)
-            # Forward = Spot * (1 + r_domestic)^T
-            spot = data_clean.loc[date, base_column]
-            dom_rate = data_clean.loc[date, domestic_rate_column]
-            
-            # Use percentage rate (convert if it appears to be in decimal form)
-            if dom_rate < 0.2:  # Assuming rates are not over 20%
-                dom_rate *= 100
-                
-            # Convert to decimal for calculation
-            dom_rate = dom_rate / 100
-            
-            if not np.isnan(spot) and not np.isnan(dom_rate):
-                result.loc[date, 'forward_price'] = spot * (1 + dom_rate) ** time_to_maturity
-    
-    # Calculate returns with roll-over adjustment
-    result['daily_returns'] = result['forward_price'].pct_change(fill_method=None)
-    result['log_returns'] = np.log(result['forward_price'] / result['forward_price'].shift(1))
-    
-    # Adjust returns on roll dates
-    for i in range(1, len(result)):
-        if result['roll_date'].iloc[i]:
-            # On roll dates, we want returns to reflect the actual price change
-            roll_yield = (result['forward_price'].iloc[i] - result['forward_price'].iloc[i-1]) / result['forward_price'].iloc[i-1]
-            result.loc[result.index[i], 'daily_returns'] = roll_yield
-            if result['forward_price'].iloc[i-1] > 0 and result['forward_price'].iloc[i] > 0:
-                result.loc[result.index[i], 'log_returns'] = np.log(result['forward_price'].iloc[i] / result['forward_price'].iloc[i-1])
-    
-    # Compute NAV
-    nav = pd.Series(index=result.index, name=f'{output_prefix}_nav')
-    nav.iloc[0] = start_value
-    
-    for i in range(1, len(nav)):
-        if not np.isnan(result['daily_returns'].iloc[i]):
-            nav.iloc[i] = nav.iloc[i-1] * (1 + result['daily_returns'].iloc[i])
-        else:
-            nav.iloc[i] = nav.iloc[i-1]
-    
-    # Add NAV to the result
-    result['NAV'] = nav
-    
-    return result
-
-def get_gbpusd_expiry(date):
-    """Calculate 6-month expiry date for GBP/USD forward contract"""
-    # Standard 6-month tenor from the given date
-    expiry = date + timedelta(days=180)
-    
-    # Adjust for weekends (forwards typically settle on business days)
-    while expiry.weekday() >= 5:  # 5 is Saturday, 6 is Sunday
-        expiry = expiry + timedelta(days=1)
-    
-    return expiry
-
-def price_gbpusd_6m_forward(data):
+def price_gbpusd_6m_forward(data, output_folder='Forex/GBP_USD_6M_Forward'):
     """Price 6-month GBP/USD forward contract"""
     print("Pricing GBP/USD 6-month forward contract...")
     
-    # Use the generic forward pricing function
-    result = price_forward_contract(
-        data=data,
-        base_column='GBP_USD',  # Spot exchange rate
-        domestic_rate_column='fed_funds_rate',  # USD interest rate
-        foreign_rate_column='UK_6M_rate',  # GBP interest rate
-        expiry_func=get_gbpusd_expiry,
-        start_value=1000,
-        output_prefix='gbpusd_forward'
+    # Forward contract parameters
+    NOTIONAL_GBP = 1.0  # Notional amount in GBP
+    DAYS_IN_YEAR = 365
+    DAYS_FORWARD = 182  # Approximately 6 months
+    
+    # Function to get next expiry date
+    def get_next_expiry(date):
+        # For a 6-month forward, expiry is 182 days from entry
+        return date + timedelta(days=DAYS_FORWARD)
+    
+    # Clean the GBP/USD spot and interest rate data
+    data = clean_numeric_data(data, ['fx_gbpusd_rate', 'fed_funds_rate', 'factor_GBP_sonia'])
+    
+    # Rename columns for clarity
+    data_fx = data.copy()
+    data_fx.rename(columns={
+        'fx_gbpusd_rate': 'spot',
+        'fed_funds_rate': 'usd_rate',
+        'factor_GBP_sonia': 'gbp_rate'
+    }, inplace=True)
+    
+    # Convert rates from percentage to decimal
+    data_fx['usd_rate'] = data_fx['usd_rate'] / 100
+    data_fx['gbp_rate'] = data_fx['gbp_rate'] / 100
+    
+    # Drop rows with NaN values in essential columns
+    data_fx = data_fx.dropna(subset=['spot', 'usd_rate', 'gbp_rate'])
+    
+    # Initialize columns for forward analysis
+    data_fx['forward_rate'] = np.nan
+    data_fx['days_to_expiry'] = np.nan
+    data_fx['roll_date'] = False
+    data_fx['contract_pnl'] = np.nan  # P&L of each individual contract
+    data_fx['active_contract'] = False  # Flag for the currently active contract
+    
+    # Create NAV series starting at 100
+    nav_series = pd.Series(index=data_fx.index, data=np.nan)
+    nav_series.iloc[0] = 100
+    
+    entry_dates = []
+    forward_rates = []
+    expiry_dates = []
+    
+    # Process each date sequentially
+    current_contract = None
+    for i in range(len(data_fx)):
+        current_date = data_fx.index[i]
+        
+        # If we don't have an active contract or the current contract has expired, enter a new one
+        if current_contract is None or current_date >= current_contract['expiry_date']:
+            # Mark roll date if we're rolling over (not the first contract)
+            if current_contract is not None:
+                data_fx.loc[current_date, 'roll_date'] = True
+            
+            # Calculate the forward rate using interest rate parity
+            spot = data_fx.loc[current_date, 'spot']
+            r_gbp = data_fx.loc[current_date, 'gbp_rate']
+            r_usd = data_fx.loc[current_date, 'usd_rate']
+            T = DAYS_FORWARD / DAYS_IN_YEAR
+            
+            # Forward rate formula: Spot * (1 + r_foreign) / (1 + r_base)
+            forward_rate = spot * (1 + r_usd * T) / (1 + r_gbp * T)
+            
+            # Store contract details
+            current_contract = {
+                'entry_date': current_date,
+                'expiry_date': current_date + timedelta(days=DAYS_FORWARD),
+                'forward_rate': forward_rate,
+                'notional_gbp': NOTIONAL_GBP
+            }
+            
+            # Store dates and rates for debugging/analysis
+            entry_dates.append(current_date)
+            forward_rates.append(forward_rate)
+            expiry_dates.append(current_contract['expiry_date'])
+            
+            # Mark this row as an active contract entry point
+            data_fx.loc[current_date, 'active_contract'] = True
+        
+        # Update data for the current date
+        data_fx.loc[current_date, 'forward_rate'] = current_contract['forward_rate']
+        data_fx.loc[current_date, 'days_to_expiry'] = (current_contract['expiry_date'] - current_date).days
+        
+        # Calculate unrealized P&L (mark-to-market)
+        # For a GBP/USD forward, buying GBP and selling USD:
+        # P&L = Notional * (Spot - Forward Rate)
+        spot = data_fx.loc[current_date, 'spot']
+        forward_rate = current_contract['forward_rate']
+        pnl = NOTIONAL_GBP * (spot - forward_rate)
+        data_fx.loc[current_date, 'contract_pnl'] = pnl
+    
+    # Calculate daily returns based on P&L changes
+    data_fx['daily_return'] = data_fx['contract_pnl'].diff() / NOTIONAL_GBP
+    data_fx.loc[data_fx.index[0], 'daily_return'] = 0  # First day has no return
+    
+    # Fill NaN values in daily returns with zeros (for roll dates)
+    # Using recommended approach to avoid FutureWarning
+    data_fx['daily_return'] = data_fx['daily_return'].fillna(0)
+    
+    # Compute cumulative NAV
+    nav_series = pd.Series(index=data_fx.index)
+    nav_series.iloc[0] = 100  # Start with 100
+    for i in range(1, len(data_fx)):
+        prev_nav = nav_series.iloc[i-1]
+        daily_return = data_fx['daily_return'].iloc[i]
+        nav_series.iloc[i] = prev_nav * (1 + daily_return)
+    
+    # Compute log returns of NAV
+    log_returns = np.log(nav_series / nav_series.shift(1))
+    
+    # Build output DataFrame
+    output_df = pd.DataFrame({
+        'Date': data_fx.index,
+        'NAV_GBPUSD_6M_Forward': nav_series.values,
+        'Log_Return_GBPUSD_6M_Forward': log_returns.values,
+        'Forward_Rate': data_fx['forward_rate'].values,
+        'Spot_Rate': data_fx['spot'].values,
+        'Days_to_Expiry': data_fx['days_to_expiry'].values,
+        'Roll_Date': data_fx['roll_date'].values,
+        'Contract_PnL': data_fx['contract_pnl'].values
+    })
+    
+    # Make NAV series with name for the standardized saving function
+    nav_named = pd.Series(nav_series.values, index=data_fx.index, name='GBPUSD_6M_Forward')
+    log_returns_named = pd.Series(log_returns.values, index=data_fx.index, name='GBPUSD_6M_Forward')
+    
+    # Additional data for standardized output
+    additional_data = {
+        'Forward_Rate': data_fx['forward_rate'].values,
+        'Spot_Rate': data_fx['spot'].values,
+        'Days_to_Expiry': data_fx['days_to_expiry'].values,
+        'Roll_Date': data_fx['roll_date'].values,
+        'Contract_PnL': data_fx['contract_pnl'].values
+    }
+    
+    # Save results using standardized function
+    save_results(
+        result=(nav_named, log_returns_named, additional_data, data_fx['roll_date'].sum()),
+        output_folder=output_folder,
+        filename="gbpusd_6m_forward_data.csv"
     )
     
-    # Save results
-    save_results(result, 'Forex/GBP_USD_6M_Forward', 'gbpusd_forward.csv')
-    
-    return result
+    print(f"GBP/USD 6-month forward pricing complete. Number of contracts: {len(entry_dates)}, Number of roll-overs: {data_fx['roll_date'].sum()}")
+    return (nav_named, log_returns_named, additional_data, data_fx['roll_date'].sum())
 
-def get_usdinr_expiry(date):
-    """Calculate 3-month expiry date for USD/INR forward contract"""
-    # Standard 3-month (91 days) tenor from the given date
-    expiry = date + timedelta(days=91)
-    
-    # Adjust for weekends (forwards typically settle on business days)
-    while expiry.weekday() >= 5:  # 5 is Saturday, 6 is Sunday
-        expiry = expiry + timedelta(days=1)
-    
-    return expiry
-
-def price_usdinr_3m_forward(data):
+def price_usdinr_3m_forward(data, output_folder='Forex/INR_USD_3M_Forward_Short'):
     """Price 3-month USD/INR forward contract (short position)"""
     print("Pricing USD/INR 3-month forward contract (short position)...")
     
-    # Use the generic forward pricing function with USD/INR-specific parameters
-    result = price_forward_contract(
-        data=data,
-        base_column='USD_INR',  # Spot exchange rate
-        domestic_rate_column='fed_funds_rate',  # USD interest rate
-        foreign_rate_column='MIBOR ',  # INR interest rate (note the space)
-        expiry_func=get_usdinr_expiry,
-        tenor_days=91,  # 3 months
-        start_value=1000,
-        output_prefix='usdinr_forward'
+    # Forward contract parameters
+    NOTIONAL_INR = 10000.0  # Notional amount in INR (10000 INR)
+    DAYS_IN_YEAR = 365
+    DAYS_FORWARD = 91  # Approximately 3 months
+    
+    # Function to get next expiry date
+    def get_next_expiry(date):
+        # For a 3-month forward, expiry is 91 days from entry
+        return date + timedelta(days=DAYS_FORWARD)
+    
+    # Clean the USD/INR spot and interest rate data
+    data = clean_numeric_data(data, ['USD_INR', 'fed_funds_rate', 'MIBOR '])
+    
+    # Rename columns for clarity
+    data_fx = data.copy()
+    data_fx.rename(columns={
+        'USD_INR': 'spot',
+        'fed_funds_rate': 'usd_rate',
+        'MIBOR ': 'inr_rate'  # Note the space in 'MIBOR '
+    }, inplace=True)
+    
+    # Convert rates from percentage to decimal
+    data_fx['usd_rate'] = data_fx['usd_rate'] / 100
+    data_fx['inr_rate'] = data_fx['inr_rate'] / 100
+    
+    # Drop rows with NaN values in essential columns
+    data_fx = data_fx.dropna(subset=['spot', 'usd_rate', 'inr_rate'])
+    
+    # Initialize columns for forward analysis
+    data_fx['forward_rate'] = np.nan
+    data_fx['days_to_expiry'] = np.nan
+    data_fx['roll_date'] = False
+    data_fx['contract_pnl'] = np.nan  # P&L of each individual contract
+    data_fx['active_contract'] = False  # Flag for the currently active contract
+    
+    # Create NAV series starting at 100
+    nav_series = pd.Series(index=data_fx.index, data=np.nan)
+    nav_series.iloc[0] = 100
+    
+    entry_dates = []
+    forward_rates = []
+    expiry_dates = []
+    
+    # Process each date sequentially
+    current_contract = None
+    for i in range(len(data_fx)):
+        current_date = data_fx.index[i]
+        
+        # If we don't have an active contract or the current contract has expired, enter a new one
+        if current_contract is None or current_date >= current_contract['expiry_date']:
+            # Mark roll date if we're rolling over (not the first contract)
+            if current_contract is not None:
+                data_fx.loc[current_date, 'roll_date'] = True
+            
+            # Calculate the forward rate using interest rate parity
+            spot = data_fx.loc[current_date, 'spot']
+            r_inr = data_fx.loc[current_date, 'inr_rate']
+            r_usd = data_fx.loc[current_date, 'usd_rate']
+            T = DAYS_FORWARD / DAYS_IN_YEAR
+            
+            # Forward rate formula: Spot * (1 + r_base) / (1 + r_foreign)
+            # For USD/INR, USD is the base and INR is the foreign currency
+            forward_rate = spot * (1 + r_usd * T) / (1 + r_inr * T)
+            
+            # Store contract details
+            current_contract = {
+                'entry_date': current_date,
+                'expiry_date': current_date + timedelta(days=DAYS_FORWARD),
+                'forward_rate': forward_rate,
+                'notional_inr': NOTIONAL_INR
+            }
+            
+            # Store dates and rates for debugging/analysis
+            entry_dates.append(current_date)
+            forward_rates.append(forward_rate)
+            expiry_dates.append(current_contract['expiry_date'])
+            
+            # Mark this row as an active contract entry point
+            data_fx.loc[current_date, 'active_contract'] = True
+        
+        # Update data for the current date
+        data_fx.loc[current_date, 'forward_rate'] = current_contract['forward_rate']
+        data_fx.loc[current_date, 'days_to_expiry'] = (current_contract['expiry_date'] - current_date).days
+        
+        # Calculate unrealized P&L (mark-to-market)
+        # For a USD/INR forward, selling USD and buying INR:
+        # P&L = Notional * (Spot - Forward Rate) / Spot
+        spot = data_fx.loc[current_date, 'spot']
+        forward_rate = current_contract['forward_rate']
+        pnl = NOTIONAL_INR * (spot - forward_rate) / spot  # Adjusted for short position
+        data_fx.loc[current_date, 'contract_pnl'] = pnl
+    
+    # Calculate daily returns based on P&L changes
+    data_fx['daily_return'] = data_fx['contract_pnl'].diff() / NOTIONAL_INR
+    data_fx.loc[data_fx.index[0], 'daily_return'] = 0  # First day has no return
+    
+    # Fill NaN values in daily returns with zeros (for roll dates)
+    data_fx['daily_return'] = data_fx['daily_return'].fillna(0)
+    
+    # Compute cumulative NAV
+    nav_series = pd.Series(index=data_fx.index)
+    nav_series.iloc[0] = 100  # Start with 100
+    for i in range(1, len(data_fx)):
+        prev_nav = nav_series.iloc[i-1]
+        daily_return = data_fx['daily_return'].iloc[i]
+        nav_series.iloc[i] = prev_nav * (1 + daily_return)
+    
+    # Compute log returns of NAV
+    log_returns = np.log(nav_series / nav_series.shift(1))
+    
+    # Make NAV series with name for the standardized saving function
+    nav_named = pd.Series(nav_series.values, index=data_fx.index, name='USDINR_3M_Forward_Short')
+    log_returns_named = pd.Series(log_returns.values, index=data_fx.index, name='USDINR_3M_Forward_Short')
+    
+    # Additional data for standardized output
+    additional_data = {
+        'Forward_Rate': data_fx['forward_rate'].values,
+        'Spot_Rate': data_fx['spot'].values,
+        'Days_to_Expiry': data_fx['days_to_expiry'].values,
+        'Roll_Date': data_fx['roll_date'].values,
+        'Contract_PnL': data_fx['contract_pnl'].values
+    }
+    
+    # Save results using standardized function
+    save_results(
+        result=(nav_named, log_returns_named, additional_data, data_fx['roll_date'].sum()),
+        output_folder=output_folder,
+        filename="usdinr_3m_forward_data.csv"
     )
     
-    # Save results
-    save_results(result, 'Forex/INR_USD_3M_Forward_Short', 'usdinr_forward.csv')
-    
-    return result
+    print(f"USD/INR 3-month forward (short) pricing complete. Number of contracts: {len(entry_dates)}, Number of roll-overs: {data_fx['roll_date'].sum()}")
+    return (nav_named, log_returns_named, additional_data, data_fx['roll_date'].sum())
 
 ###############################################################################
 #                              MAIN EXECUTION                                 #
@@ -1022,6 +1762,54 @@ def main():
             print("Skipping 10y TIPS: Required column 'Real_10Y_yield' not found in dataset")
     except Exception as e:
         print(f"Error pricing 10-year TIPS: {str(e)}")
+        
+    # 2.4. 1-year EUR Zero Coupon Bond
+    try:
+        if '1_year_euro_yield_curve' in data.columns and 'fx_eurusd_rate' in data.columns:
+            eur_zcb_results = price_1y_eur_zcb(data)
+            pricing_results['1y_EUR_ZCB'] = eur_zcb_results
+        else:
+            missing = []
+            for col in ['1_year_euro_yield_curve', 'fx_eurusd_rate']:
+                if col not in data.columns:
+                    missing.append(col)
+            print(f"Skipping 1-year EUR Zero Coupon Bond: Required columns {missing} not found in dataset")
+    except Exception as e:
+        print(f"Error pricing 1-year EUR Zero Coupon Bond: {str(e)}")
+        
+    # 2.5. High Yield Corporate Debt
+    try:
+        if 'high_yield_credit spread' in data.columns and '10y_treasury_yield' in data.columns:
+            hy_corp_debt_results = price_high_yield_corp_debt(data)
+            pricing_results['High_Yield_Corp_Debt'] = hy_corp_debt_results
+        else:
+            missing = []
+            for col in ['high_yield_credit spread', '10y_treasury_yield']:
+                if col not in data.columns:
+                    missing.append(col)
+            print(f"Skipping High Yield Corporate Debt: Required columns {missing} not found in dataset")
+    except Exception as e:
+        print(f"Error pricing High Yield Corporate Debt: {str(e)}")
+    
+    # 2.6. 5-year Green Bond
+    try:
+        if '5y_treasury_yield' in data.columns:
+            green_bond_results = price_5y_green_bond(data)
+            pricing_results['5y_Green_Bond'] = green_bond_results
+        else:
+            print("Skipping 5-year Green Bond: Required column '5y_treasury_yield' not found in dataset")
+    except Exception as e:
+        print(f"Error pricing 5-year Green Bond: {str(e)}")
+    
+    # 2.7. 30-year Revenue Bond
+    try:
+        if '30Y_treasury_yield' in data.columns:
+            revenue_bond_results = price_30y_revenue_bond(data)
+            pricing_results['30y_Revenue_Bond'] = revenue_bond_results
+        else:
+            print("Skipping 30-year Revenue Bond: Required column '30Y_treasury_yield' not found in dataset")
+    except Exception as e:
+        print(f"Error pricing 30-year Revenue Bond: {str(e)}")
     
     # 3. Price derivatives
     # 3.1. S&P 500 Futures (1 month)
@@ -1037,8 +1825,6 @@ def main():
     # 3.2. VIX Futures (front month)
     try:
         if 'vix_index_level' in data.columns and 'fed_funds_rate' in data.columns:
-            # Update the data columns
-            data['vix_index'] = data['vix_index_level']
             vix_futures_results = price_vix_futures(data)
             pricing_results['VIX_Futures'] = vix_futures_results
         else:
@@ -1080,9 +1866,6 @@ def main():
     # 4.1. GBP/USD Forward (6 month)
     try:
         if 'fx_gbpusd_rate' in data.columns and 'fed_funds_rate' in data.columns and 'factor_GBP_sonia' in data.columns:
-            # Update the data columns
-            data['GBP_USD'] = data['fx_gbpusd_rate']
-            data['UK_6M_rate'] = data['factor_GBP_sonia']
             gbpusd_results = price_gbpusd_6m_forward(data)
             pricing_results['GBPUSD_Forward'] = gbpusd_results
         else:
