@@ -56,19 +56,28 @@ class Portfolio:
         
     def _load_pricing_data(self):
         """Load instrument pricing data from asset directories"""
+        # Get parent directory (workspace root)
+        parent_dir = os.path.dirname(os.getcwd())
+        
         # Dictionary mapping asset categories to their directory paths
         asset_dirs = {
-            'Equity': os.path.join(os.getcwd(), 'Equity'),
-            'Derivatives': os.path.join(os.getcwd(), 'Derivatives'),
-            'Fixed_Income': os.path.join(os.getcwd(), 'Fixed_Income'),
-            'Forex': os.path.join(os.getcwd(), 'Forex'),
-            'Money_Market': os.path.join(os.getcwd(), 'Money_Market')
+            'Equity': os.path.join(parent_dir, 'Equity'),
+            'Derivatives': os.path.join(parent_dir, 'Derivatives'),
+            'Fixed_Income': os.path.join(parent_dir, 'Fixed_Income'),
+            'Forex': os.path.join(parent_dir, 'Forex'),
+            'Money_Market': os.path.join(parent_dir, 'Money_Market')
         }
+        
+        print(f"Current working directory: {os.getcwd()}")
+        print(f"Parent directory: {parent_dir}")
+        print(f"Asset directories: {asset_dirs}")
         
         # Load equity data
         if os.path.exists(asset_dirs['Equity']):
+            print(f"Found Equity directory: {asset_dirs['Equity']}")
             equity_csv = os.path.join(asset_dirs['Equity'], 'equity_data.csv')
             if os.path.exists(equity_csv):
+                print(f"Found equity data CSV: {equity_csv}")
                 df = pd.read_csv(equity_csv, index_col=0, parse_dates=True)
                 # Print available columns for debugging
                 print(f"Available equity columns: {[col for col in df.columns if col.startswith('NAV_')]}")
@@ -83,45 +92,94 @@ class Portfolio:
                         instrument_df.columns = ['NAV', 'Return']
                         self.instruments[instrument_name] = instrument_df
                         print(f"Loaded {instrument_name} data from Equity with {len(instrument_df)} observations")
+            else:
+                print(f"Equity data CSV not found: {equity_csv}")
+        else:
+            print(f"Equity directory not found: {asset_dirs['Equity']}")
         
         # Load derivatives data
         if os.path.exists(asset_dirs['Derivatives']):
+            print(f"Found Derivatives directory: {asset_dirs['Derivatives']}")
             # Find all subdirectories in Derivatives
             derivative_dirs = [d for d in os.listdir(asset_dirs['Derivatives']) if os.path.isdir(os.path.join(asset_dirs['Derivatives'], d))]
+            print(f"Found derivative directories: {derivative_dirs}")
             for derivative_dir in derivative_dirs:
                 full_dir_path = os.path.join(asset_dirs['Derivatives'], derivative_dir)
                 # Find CSV files in this directory
                 csv_files = glob(os.path.join(full_dir_path, '*_data.csv')) or glob(os.path.join(full_dir_path, '*.csv'))
+                print(f"Found CSV files in {derivative_dir}: {csv_files}")
                 for csv_file in csv_files:
-                    # Extract name from directory name
-                    instrument_name = derivative_dir.replace('_', ' ')
+                    # Map directory names to instrument names in our allocation
+                    instrument_mapping = {
+                        'VIX_FrontMonth_futures': 'VIX_Futures',
+                        'USD-JPY_ATM_Put_Option': 'USDJPY_ATM_Put',
+                        'Exxon_ITM_Put_option': 'XOM_ITM_Put',
+                        'EUR-USD_ATM_Call_Option': 'EURUSD_ATM_Call',
+                        'Costco_ITM_Call_option': 'Costco_ITM_Call',
+                        '6M_Soybean_Futures': 'Soybean_Futures_6M',
+                        '3M_Gold_Futures': 'Gold_Futures_3M',
+                        '1M_S&P_Futures': 'SP500_Futures_1M',
+                        '1M_Crude_Oil_Futures': 'Crude_Oil_Futures_1M'
+                    }
+                    # Get the instrument name from mapping or use directory name as fallback
+                    instrument_name = instrument_mapping.get(derivative_dir, derivative_dir.replace('_', ' '))
                     self._load_instrument_data(instrument_name, csv_file)
+        else:
+            print(f"Derivatives directory not found: {asset_dirs['Derivatives']}")
 
         # Load fixed income data
         if os.path.exists(asset_dirs['Fixed_Income']):
+            print(f"Found Fixed_Income directory: {asset_dirs['Fixed_Income']}")
             # Find all subdirectories in Fixed_Income
             fixed_income_dirs = [d for d in os.listdir(asset_dirs['Fixed_Income']) if os.path.isdir(os.path.join(asset_dirs['Fixed_Income'], d))]
+            print(f"Found fixed income directories: {fixed_income_dirs}")
             for fi_dir in fixed_income_dirs:
                 full_dir_path = os.path.join(asset_dirs['Fixed_Income'], fi_dir)
                 # Find CSV files in this directory
                 csv_files = glob(os.path.join(full_dir_path, '*_data.csv')) or glob(os.path.join(full_dir_path, '*.csv'))
+                print(f"Found CSV files in {fi_dir}: {csv_files}")
                 for csv_file in csv_files:
-                    # Extract name from directory name
-                    instrument_name = fi_dir.replace('_', ' ')
+                    # Map directory names to instrument names in our allocation
+                    instrument_mapping = {
+                        'Revenue_Bond': '30y_Revenue_Bond',
+                        '5year_corp_green_bond': '5y_Green_Bond',
+                        'LQD_ETF': 'LQD_ETF',
+                        'High_Yield_CorpDebt': 'High_Yield_Corp_Debt',
+                        '10_year_TIPS': '10y_TIPS',
+                        '10_year_bond': '10y_Bond',
+                        '1_year_EUR_bond': '1y_EUR_ZCB'
+                    }
+                    # Get the instrument name from mapping or use directory name as fallback
+                    instrument_name = instrument_mapping.get(fi_dir, fi_dir.replace('_', ' '))
                     self._load_instrument_data(instrument_name, csv_file)
+        else:
+            print(f"Fixed_Income directory not found: {asset_dirs['Fixed_Income']}")
         
         # Load Forex data
         if os.path.exists(asset_dirs['Forex']):
+            print(f"Found Forex directory: {asset_dirs['Forex']}")
             # Find all subdirectories in Forex
             forex_dirs = [d for d in os.listdir(asset_dirs['Forex']) if os.path.isdir(os.path.join(asset_dirs['Forex'], d))]
+            print(f"Found forex directories: {forex_dirs}")
             for forex_dir in forex_dirs:
                 full_dir_path = os.path.join(asset_dirs['Forex'], forex_dir)
                 # Find CSV files in this directory
                 csv_files = glob(os.path.join(full_dir_path, '*_data.csv')) or glob(os.path.join(full_dir_path, '*.csv'))
+                print(f"Found CSV files in {forex_dir}: {csv_files}")
                 for csv_file in csv_files:
-                    # Extract name from directory name
-                    instrument_name = forex_dir.replace('_', ' ')
+                    # Map directory names to instrument names in our allocation
+                    instrument_mapping = {
+                        'INR_USD_3M_Forward_Short': 'USDINR_Forward',
+                        'GBP_USD_6M_Forward': 'GBPUSD_Forward'
+                    }
+                    # Get the instrument name from mapping or use directory name as fallback
+                    instrument_name = instrument_mapping.get(forex_dir, forex_dir.replace('_', ' '))
                     self._load_instrument_data(instrument_name, csv_file)
+        else:
+            print(f"Forex directory not found: {asset_dirs['Forex']}")
+        
+        # Print loaded instruments for debugging
+        print(f"Loaded {len(self.instruments)} instruments: {list(self.instruments.keys())}")
         
         # Align datasets to common date range
         self._align_datasets()
@@ -417,13 +475,19 @@ class Portfolio:
         # Ensure folder exists
         os.makedirs(folder_path, exist_ok=True)
         
-        # Save NAV history
+        # Save NAV history with retry mechanism
         nav_path = os.path.join(folder_path, 'portfolio_nav_history.csv')
-        self.nav_history.to_csv(nav_path)
+        try:
+            self.nav_history.to_csv(nav_path)
+        except PermissionError:
+            print(f"Warning: Permission error when saving {nav_path}. File may be in use.")
         
-        # Save returns history
+        # Save returns history with retry mechanism
         returns_path = os.path.join(folder_path, 'portfolio_returns_history.csv')
-        self.returns_history.to_csv(returns_path)
+        try:
+            self.returns_history.to_csv(returns_path)
+        except PermissionError:
+            print(f"Warning: Permission error when saving {returns_path}. File may be in use.")
         
         print(f"Portfolio results saved to {folder_path}")
 
@@ -489,63 +553,104 @@ def plot_portfolio_performance(portfolio, save_prefix):
     plt.savefig(f'{save_prefix}_cumulative_nav_log.png', dpi=300)
     plt.close(fig1)
     
-    # Create figure for individual positions (with log scale)
-    fig2, ax2 = plt.subplots(figsize=(12, 6))
+    # Create improved individual asset chart with better y-axis limits
+    fig2, ax2 = plt.subplots(figsize=(15, 8))
     
-    # Plot individual position NAVs
-    for name in list(portfolio.instruments.keys()) + ['Cash']:
-        nav_col = f'{name}_NAV'
-        if nav_col in portfolio.nav_history.columns:
-            # Only plot positions that have positive values
-            if (portfolio.nav_history[nav_col] > 0).all():
-                ax2.plot(portfolio.nav_history.index, portfolio.nav_history[nav_col], '-', label=f'{name}')
+    # Group instruments by type
+    instrument_groups = {
+        'Equity': ['Apple', 'Lockheed_Martin', 'Nvidia', 'Procter_Gamble', 
+                   'Johnson_Johnson', 'Toyota', 'Nestle', 'X_Steel'],
+        'Fixed_Income': ['10y_Bond', '10y_TIPS', '1y_EUR_ZCB', '5y_Green_Bond', 
+                         'High_Yield_Corp_Debt', 'LQD_ETF', '30y_Revenue_Bond'],
+        'Derivatives': ['SP500_Futures_1M', 'VIX_Futures', 'Crude_Oil_Futures_1M', 
+                       'Gold_Futures_3M', 'Soybean_Futures_6M', 'Costco_ITM_Call', 
+                       'EURUSD_ATM_Call', 'XOM_ITM_Put', 'USDJPY_ATM_Put'],
+        'Forex': ['GBPUSD_Forward', 'USDINR_Forward'],
+        'Cash': ['Cash']
+    }
     
-    ax2.set_title('Individual Position NAVs (Log Scale)')
-    ax2.set_ylabel('NAV ($)')
-    ax2.set_xlabel('Date')
-    ax2.set_yscale('log')  # Use logarithmic scale for y-axis
+    # Define colors and styles for each group
+    group_styles = {
+        'Equity': {'color': 'blue', 'alpha': 0.8, 'linestyle': '-'},
+        'Fixed_Income': {'color': 'green', 'alpha': 0.8, 'linestyle': '--'},
+        'Derivatives': {'color': 'red', 'alpha': 0.8, 'linestyle': '-.'},
+        'Forex': {'color': 'purple', 'alpha': 0.8, 'linestyle': ':'},
+        'Cash': {'color': 'black', 'alpha': 0.8, 'linestyle': '-'}
+    }
+    
+    # Define minimum threshold for values to display (eliminate extreme negatives)
+    min_threshold = 100.0  # $100 minimum value to filter out extreme dips
+    
+    # Prepare a list to collect the asset data for plotting
+    asset_plots = []
+    
+    # First pass: collect data points
+    for group_name, instruments in instrument_groups.items():
+        for i, name in enumerate(instruments):
+            nav_col = f'{name}_NAV'
+            if nav_col in portfolio.nav_history.columns:
+                # Filter to only show values above the threshold
+                filtered_data = portfolio.nav_history[portfolio.nav_history[nav_col] > min_threshold].copy()
+                if not filtered_data.empty:
+                    style = group_styles[group_name]
+                    # Vary the color slightly within each group
+                    color = style['color']
+                    if len(instruments) > 1:
+                        # Adjust color brightness for differentiation within group
+                        brightness = 0.5 + (i / (len(instruments) * 2))
+                        if color == 'blue':
+                            color = (0, 0, brightness)
+                        elif color == 'green':
+                            color = (0, brightness, 0)
+                        elif color == 'red':
+                            color = (brightness, 0, 0)
+                        elif color == 'purple':
+                            color = (brightness, 0, brightness)
+                    
+                    asset_plots.append({
+                        'name': name,
+                        'group': group_name,
+                        'data': filtered_data[nav_col],
+                        'style': style,
+                        'color': color,
+                        'final_value': filtered_data[nav_col].iloc[-1] if len(filtered_data) > 0 else 0
+                    })
+    
+    # Sort assets by final value to plot highest values last (on top) for better visibility
+    asset_plots.sort(key=lambda x: x['final_value'])
+    
+    # Second pass: plot the data
+    for asset in asset_plots:
+        ax2.plot(asset['data'].index, asset['data'], 
+                 linestyle=asset['style']['linestyle'], 
+                 color=asset['color'], 
+                 alpha=asset['style']['alpha'],
+                 label=f"{asset['name']} ({asset['group']})")
+    
+    # Set y-axis parameters
+    ax2.set_yscale('log')
+    ax2.set_ylim(min_threshold, None)  # Set minimum y value to our threshold
+    
+    ax2.set_title('Individual Position NAVs (Log Scale)', fontsize=14)
+    ax2.set_ylabel('NAV ($)', fontsize=12)
+    ax2.set_xlabel('Date', fontsize=12)
     ax2.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f'${x:,.0f}'))
-    ax2.legend(loc='center left', bbox_to_anchor=(1, 0.5))
+    
+    # Improve the grid for better readability
     ax2.grid(True, which='both', linestyle='-', alpha=0.2)
     
+    # Create a more readable legend with columns
+    leg = ax2.legend(loc='upper center', bbox_to_anchor=(0.5, -0.15), 
+                    ncol=4, fontsize=9, frameon=True, facecolor='white', edgecolor='gray')
+    
+    # Make the plot a bit taller to accommodate the legend below
+    plt.subplots_adjust(bottom=0.25)
+    
     plt.tight_layout()
-    plt.savefig(f'{save_prefix}_individual_navs_log.png', dpi=300)
+    plt.savefig(f'{save_prefix}_individual_navs_log.png', dpi=300, bbox_inches='tight')
     plt.close(fig2)
     
-    # Create figure for allocation over time
-    fig3, ax3 = plt.subplots(figsize=(12, 6))
-    allocation_data = {}
-    for name in list(portfolio.instruments.keys()) + ['Cash']:
-        nav_col = f'{name}_NAV'
-        if nav_col in portfolio.nav_history.columns:
-            # Calculate percentage allocation (absolute value for plotting purposes)
-            allocation_data[name] = portfolio.nav_history[nav_col].abs() / portfolio.nav_history['NAV'].abs() * 100
-    
-    if allocation_data:
-        allocation_df = pd.DataFrame(allocation_data)
-        
-        # Normalize the allocation percentages to sum to 100%
-        row_sums = allocation_df.sum(axis=1)
-        for col in allocation_df.columns:
-            allocation_df[col] = allocation_df[col] / row_sums * 100
-            
-        # Plot as lines instead of stacked area to handle negative values
-        for col in allocation_df.columns:
-            ax3.plot(allocation_df.index, allocation_df[col], '-', label=col)
-            
-        ax3.set_ylabel('Allocation (%)')
-        ax3.set_xlabel('Date')
-        ax3.set_title('Portfolio Allocation Over Time')
-        ax3.grid(True, alpha=0.3)
-        ax3.legend(loc='center left', bbox_to_anchor=(1, 0.5))
-    
-    plt.tight_layout()
-    plt.savefig(f'{save_prefix}_allocation.png', dpi=300)
-    plt.close(fig3)
-    
-    # Also create standard linear scale charts for comparison
-    
-    # Linear scale cumulative NAV
+    # Also create linear scale chart for the cumulative NAV
     fig4, ax4 = plt.subplots(figsize=(12, 6))
     ax4.plot(portfolio.nav_history.index, portfolio.nav_history['NAV'], 'b-', linewidth=2)
     ax4.set_title('Portfolio Cumulative NAV (Linear Scale)')
@@ -562,25 +667,33 @@ def plot_portfolio_performance(portfolio, save_prefix):
 def main():
     # Example allocation with a diversified portfolio
     custom_allocation = {
-        'Apple': 4.5,
-        'Lockheed_Martin': 4.5,
+        'Apple': 3.0,
+        'Lockheed_Martin': 3.0,
         'Nvidia': 3.0,
         'Procter_Gamble': 3.0,
         'Johnson_Johnson': 3.0,
         'Toyota': 3.0,
         'Nestle': 3.0,
         'X_Steel': 3.0,
-        '1M Crude Oil Futures': 4.0,
-        '3M Gold Futures': 4.0,
-        '6M Soybean Futures': 4.0,
-        'VIX FrontMonth futures': 4.0,
-        '1M S&P Futures': 4.0,
-        'GBP USD 6M Forward': 5.0,
-        'LQD ETF': 5.0,
-        '10 year bond': 10.0,
-        '1 year EUR bond': 10.0, 
-        'High Yield CorpDebt': 10.0,
-        'Cash': 13.0  
+        '10y_Bond': 4.0,
+        'LQD_ETF': 4.0,
+        '10y_TIPS': 4.0,
+        '1y_EUR_ZCB': 4.0,
+        'High_Yield_Corp_Debt': 4.0,
+        '5y_Green_Bond': 4.0,
+        '30y_Revenue_Bond': 4.0,
+        'SP500_Futures_1M': 4.0,
+        'VIX_Futures': 4.0,
+        'Crude_Oil_Futures_1M': 4.0,
+        'Gold_Futures_3M': 4.0,
+        'Soybean_Futures_6M': 4.0,
+        'Costco_ITM_Call': 4.0,
+        'EURUSD_ATM_Call': 4.0,
+        'XOM_ITM_Put': 4.0,
+        'USDJPY_ATM_Put': 4.0,
+        'GBPUSD_Forward': 4.0,
+        'USDINR_Forward': 4.0,
+        'Cash': 4.0
     }
     
     # Output directory
