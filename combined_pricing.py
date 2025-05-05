@@ -789,7 +789,7 @@ def price_5y_green_bond(data, output_folder='Fixed_Income/5year_corp_green_bond'
     print(f"5-year Green Bond pricing complete. Number of roll-overs: {data['roll_date_green'].sum()}")
     return output_df
 
-def price_30y_revenue_bond(data, output_folder='Fixed_Income/30year_revenue_bond'):
+def price_30y_revenue_bond(data, output_folder='Fixed_Income/Revenue_Bond'):
     """Price 30-year Revenue Bond and save results"""
     print("Pricing 30-year Revenue Bond...")
     
@@ -801,10 +801,10 @@ def price_30y_revenue_bond(data, output_folder='Fixed_Income/30year_revenue_bond
     REVENUE_SPREAD = 0.0075  # +75 bps spread over 30Y Treasuries
     
     # Clean the yield data
-    data = clean_numeric_data(data, ['30y_treasury_yield'])
+    data = clean_numeric_data(data, ['30Y_treasury_yield'])
     
     # Convert yield from percentage to decimal
-    data['30y_treasury_yield'] = data['30y_treasury_yield'] / 100
+    data['30Y_treasury_yield'] = data['30Y_treasury_yield'] / 100
     
     # Initialize variables for bond pricing
     data['bond_price_revenue'] = np.nan
@@ -829,7 +829,7 @@ def price_30y_revenue_bond(data, output_folder='Fixed_Income/30year_revenue_bond
         time_to_maturity = days_to_maturity / 365.0
         
         # Calculate effective yield (Treasury + revenue spread)
-        base_yield = data.loc[current_date, '30y_treasury_yield']
+        base_yield = data.loc[current_date, '30Y_treasury_yield']
         if not np.isnan(base_yield):
             effective_yield = base_yield + REVENUE_SPREAD
             data.loc[current_date, 'bond_price_revenue'] = calculate_bond_price(
@@ -841,7 +841,7 @@ def price_30y_revenue_bond(data, output_folder='Fixed_Income/30year_revenue_bond
             )
     
     # Calculate returns
-    data['daily_returns_revenue'] = data['bond_price_revenue'].pct_change(fill_method=None)
+    data['daily_returns_revenue'] = data['bond_price_revenue'].pct_change()
     data['log_returns_revenue'] = np.log(data['bond_price_revenue'] / data['bond_price_revenue'].shift(1))
     
     # Adjust returns on roll dates
@@ -868,15 +868,15 @@ def price_30y_revenue_bond(data, output_folder='Fixed_Income/30year_revenue_bond
         'Bond_Price': data['bond_price_revenue'].values,
         'Days_to_Maturity': data['days_to_maturity_revenue'].values,
         'Roll_Date': data['roll_date_revenue'].values,
-        'Yield_Treasury_30Y': data['30y_treasury_yield'].values * 100,  # Convert back to percentage
-        'Effective_Yield': (data['30y_treasury_yield'] + REVENUE_SPREAD).values * 100
+        'Yield_Treasury_30Y': data['30Y_treasury_yield'].values * 100,  # Convert back to percentage
+        'Effective_Yield': (data['30Y_treasury_yield'] + REVENUE_SPREAD).values * 100
     }
     
     # Save results
     output_df = save_results(
         result=(nav, log_returns, additional_data, data['roll_date_revenue'].sum()),
         output_folder=output_folder,
-        filename="30y_revenue_bond_data.csv"
+        filename="30_year_revenue_bond_data.csv"
     )
     
     print(f"30-year Revenue Bond pricing complete. Number of roll-overs: {data['roll_date_revenue'].sum()}")
@@ -1170,12 +1170,12 @@ def price_crude_oil_futures(data, output_folder='Derivatives/1M_Crude_Oil_Future
     print(f"Crude Oil Futures pricing complete. Number of roll-overs: {data['roll_date'].sum()}")
     return (nav, data['log_returns'], additional_data, data['roll_date'].sum())
 
-def price_gold_futures(data, output_folder='Commodities/Gold_Futures'):
+def price_gold_futures(data, output_folder='Derivatives/3M_Gold_Futures'):
     """Price Gold Futures and save results"""
     print("Pricing Gold Futures...")
     
     # Clean the data
-    data = clean_numeric_data(data, ['gold_futures_price'])
+    data = clean_numeric_data(data, ['gold_spot_price'])
     
     # Initialize variables
     data['gold_futures_roll_date'] = False
@@ -1184,6 +1184,10 @@ def price_gold_futures(data, output_folder='Commodities/Gold_Futures'):
     # Set contract specifications
     CONTRACT_MONTHS = [2, 4, 6, 8, 10, 12]  # Feb, Apr, Jun, Aug, Oct, Dec
     CONTRACT_SIZE = 100  # troy ounces
+    STORAGE_COST = 0.005  # 0.5% annual storage cost
+    
+    # Calculate pricing based on cost-of-carry model
+    data['gold_futures_price'] = np.nan
     
     # Calculate days to expiry and identify roll dates
     expiry_date = None
@@ -1222,6 +1226,22 @@ def price_gold_futures(data, output_folder='Commodities/Gold_Futures'):
         # Calculate days to expiry
         days_to_expiry = (expiry_date - current_date).days
         data.loc[current_date, 'days_to_expiry'] = days_to_expiry
+        
+        # Calculate futures price using cost-of-carry model
+        if not np.isnan(data.loc[current_date, 'gold_spot_price']):
+            time_to_expiry = days_to_expiry / 365.0  # Time in years
+            
+            # If fed_funds_rate is available, use it, otherwise use a default rate of 2%
+            if 'fed_funds_rate' in data.columns and not np.isnan(data.loc[current_date, 'fed_funds_rate']):
+                interest_rate = data.loc[current_date, 'fed_funds_rate'] / 100
+            else:
+                interest_rate = 0.02  # Default 2%
+                
+            # Futures price = Spot price * e^((r + s) * T)
+            # where r = interest rate, s = storage cost, T = time to expiry
+            data.loc[current_date, 'gold_futures_price'] = data.loc[current_date, 'gold_spot_price'] * np.exp(
+                (interest_rate + STORAGE_COST) * time_to_expiry
+            )
     
     # Calculate daily returns
     data['daily_returns'] = data['gold_futures_price'].pct_change(fill_method=None)
@@ -1249,6 +1269,7 @@ def price_gold_futures(data, output_folder='Commodities/Gold_Futures'):
     # Additional data for output
     additional_data = {
         'Futures_Price': data['gold_futures_price'].values,
+        'Spot_Price': data['gold_spot_price'].values,
         'Days_to_Expiry': data['days_to_expiry'].values,
         'Roll_Date': data['gold_futures_roll_date'].values
     }
@@ -1257,7 +1278,7 @@ def price_gold_futures(data, output_folder='Commodities/Gold_Futures'):
     output_df = save_results(
         result=(nav, log_returns, additional_data, data['gold_futures_roll_date'].sum()),
         output_folder=output_folder,
-        filename="gold_futures_data.csv"
+        filename="gold_futures.csv"
     )
     
     print(f"Gold Futures pricing complete. Number of roll-overs: {data['gold_futures_roll_date'].sum()}")
