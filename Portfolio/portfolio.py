@@ -4,6 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
 from glob import glob
+import sys
 
 # Incorporate the Portfolio class directly instead of importing
 class Portfolio:
@@ -34,8 +35,16 @@ class Portfolio:
             df = df.asfreq('D', method='ffill')
             
             # Find NAV and Log Return columns
-            nav_col = next((col for col in df.columns if 'NAV' in col), None)
-            return_col = next((col for col in df.columns if 'Return' in col or 'return' in col), None)
+            nav_col = None
+            # Special handling for DAX 30D Variance Swap
+            if 'variance_swap_fixed_leg' in file_path.lower() and 'NAV' in df.columns:
+                nav_col = 'NAV'
+                # Variance swap file doesn't have an explicit return column - calculate it
+                df['Return'] = df[nav_col].pct_change()
+                return_col = 'Return'
+            else:
+                nav_col = next((col for col in df.columns if 'NAV' in col), None)
+                return_col = next((col for col in df.columns if 'Return' in col or 'return' in col), None)
             
             if nav_col and return_col:
                 # Create a subset with just the NAV and return columns
@@ -119,7 +128,11 @@ class Portfolio:
                         '6M_Soybean_Futures': 'Soybean_Futures_6M',
                         '3M_Gold_Futures': 'Gold_Futures_3M',
                         '1M_S&P_Futures': 'SP500_Futures_1M',
-                        '1M_Crude_Oil_Futures': 'Crude_Oil_Futures_1M'
+                        '1M_Crude_Oil_Futures': 'Crude_Oil_Futures_1M',
+                        '5Year_CDS_Ford': 'Ford_5Y_CDS',
+                        '30D_Variance_Swap_fixed_leg_DAX': 'DAX_30D_Variance_Swap',
+                        'ASIAN_Option': 'Nikkei_Asian_Put',
+                        'SPX_Barrier_option': 'SPX_Barrier_Option'
                     }
                     # Get the instrument name from mapping or use directory name as fallback
                     instrument_name = instrument_mapping.get(derivative_dir, derivative_dir.replace('_', ' '))
@@ -564,7 +577,8 @@ def plot_portfolio_performance(portfolio, save_prefix):
                          'High_Yield_Corp_Debt', 'LQD_ETF', '30y_Revenue_Bond'],
         'Derivatives': ['SP500_Futures_1M', 'VIX_Futures', 'Crude_Oil_Futures_1M', 
                        'Gold_Futures_3M', 'Soybean_Futures_6M', 'Costco_ITM_Call', 
-                       'EURUSD_ATM_Call', 'XOM_ITM_Put', 'USDJPY_ATM_Put'],
+                       'EURUSD_ATM_Call', 'XOM_ITM_Put', 'USDJPY_ATM_Put',
+                       'Ford_5Y_CDS', 'DAX_30D_Variance_Swap', 'Nikkei_Asian_Put', 'SPX_Barrier_Option'],
         'Forex': ['GBPUSD_Forward', 'USDINR_Forward'],
         'Cash': ['Cash']
     }
@@ -682,18 +696,22 @@ def main():
         'High_Yield_Corp_Debt': 4.0,
         '5y_Green_Bond': 4.0,
         '30y_Revenue_Bond': 4.0,
-        'SP500_Futures_1M': 4.0,
-        'VIX_Futures': 4.0,
-        'Crude_Oil_Futures_1M': 4.0,
-        'Gold_Futures_3M': 4.0,
-        'Soybean_Futures_6M': 4.0,
-        'Costco_ITM_Call': 4.0,
-        'EURUSD_ATM_Call': 4.0,
-        'XOM_ITM_Put': 4.0,
-        'USDJPY_ATM_Put': 4.0,
-        'GBPUSD_Forward': 4.0,
-        'USDINR_Forward': 4.0,
-        'Cash': 4.0
+        'SP500_Futures_1M': 3.0,
+        'VIX_Futures': 3.0,
+        'Crude_Oil_Futures_1M': 3.0,
+        'Gold_Futures_3M': 3.0,
+        'Soybean_Futures_6M': 3.0,
+        'Costco_ITM_Call': 3.0,
+        'EURUSD_ATM_Call': 3.0,
+        'XOM_ITM_Put': 3.0,
+        'USDJPY_ATM_Put': 3.0,
+        'GBPUSD_Forward': 3.0,
+        'USDINR_Forward': 3.0,
+        'Ford_5Y_CDS': 3.0,
+        'DAX_30D_Variance_Swap': 3.0,
+        'Nikkei_Asian_Put': 3.0,
+        'SPX_Barrier_Option': 3.0,
+        'Cash': 3.0
     }
     
     # Output directory
