@@ -2100,6 +2100,440 @@ def price_usdinr_3m_forward(data, output_folder='Forex/INR_USD_3M_Forward_Short'
     return (nav_named, log_returns_named, additional_data, data_fx['roll_date'].sum())
 
 ###############################################################################
+#                          DERIVATIVES PRICING                                #
+###############################################################################
+
+def price_variance_swap_dax(data, output_folder='Derivatives/30D_Variance_Swap_fixed_leg_DAX'):
+    """Price 30-day DAX variance swap fixed leg and save results"""
+    print("Pricing 30-day DAX variance swap fixed leg...")
+    
+    # Constants
+    NOTIONAL = 100
+    MATURITY_DAYS = 30
+    ANNUAL_BASIS = 365.0
+    TRANSACTION_COST = 0.002  # 0.2% transaction cost on roll
+    
+    # Clean and convert data
+    cols = ['DAX_Call_ivol_30D', 'DAX_Put_ivol_30D']
+    data = clean_numeric_data(data, cols)
+    
+    # Convert volatility from percentage to decimal
+    data[['DAX_Call_ivol_30D', 'DAX_Put_ivol_30D']] = data[['DAX_Call_ivol_30D', 'DAX_Put_ivol_30D']] / 100
+    
+    # Initialize
+    data['fixed_variance'] = np.nan
+    data['fixed_vol'] = np.nan
+    data['roll_date'] = False
+    data['days_to_expiry'] = 0
+    
+    # Rolling logic
+    start_date = data.index[0]
+    current_expiry = start_date + pd.Timedelta(days=MATURITY_DAYS)
+    
+    for i in range(len(data)):
+        current_date = data.index[i]
+        
+        # Roll check
+        if current_date >= current_expiry:
+            data.loc[current_date, 'roll_date'] = True
+            current_expiry = current_date + pd.Timedelta(days=MATURITY_DAYS)
+        
+        # Time to expiry
+        days_to_expiry = (current_expiry - current_date).days
+        data.loc[current_date, 'days_to_expiry'] = days_to_expiry
+        
+        # Compute fixed leg (variance strike) as average squared vol
+        call_ivol = data.loc[current_date, 'DAX_Call_ivol_30D']
+        put_ivol = data.loc[current_date, 'DAX_Put_ivol_30D']
+        
+        if not np.isnan(call_ivol) and not np.isnan(put_ivol):
+            avg_ivol = 0.5 * (call_ivol + put_ivol)
+            fixed_var = avg_ivol ** 2
+            data.loc[current_date, 'fixed_vol'] = avg_ivol
+            data.loc[current_date, 'fixed_variance'] = fixed_var
+    
+    # NAV Calculation — assume you are paid daily implied variance (fixed) as return proxy
+    data['daily_return'] = 0.0
+    data['log_return'] = 0.0
+    
+    # Return logic: use fixed variance to generate synthetic return
+    # (in real variance swap you get realized - fixed, here we price fixed leg only)
+    data['daily_return'] = data['fixed_variance'] / ANNUAL_BASIS
+    data['log_return'] = np.log(1 + data['daily_return'])
+    
+    # Apply transaction cost on roll
+    for i in range(1, len(data)):
+        if data['roll_date'].iloc[i]:
+            data.loc[data.index[i], 'daily_return'] -= TRANSACTION_COST
+    
+    # NAV Computation
+    nav = pd.Series(index=data.index, name='DAX30D_VarianceSwap')
+    nav.iloc[0] = NOTIONAL
+    for i in range(1, len(nav)):
+        nav.iloc[i] = nav.iloc[i - 1] * (1 + data['daily_return'].iloc[i])
+    
+    # Create a named log_returns series
+    log_returns = pd.Series(data['log_return'].values, index=data.index, name='DAX30D_VarianceSwap')
+    
+    # Additional data for output
+    additional_data = {
+        'Fixed_Variance': data['fixed_variance'].values,
+        'Fixed_IVOL': data['fixed_vol'].values * 100,  # Convert back to percentage
+        'Roll_Date': data['roll_date'].values,
+        'Days_to_Expiry': data['days_to_expiry'].values,
+        'Call_IVOL': data['DAX_Call_ivol_30D'].values * 100,  # Convert back to percentage
+        'Put_IVOL': data['DAX_Put_ivol_30D'].values * 100  # Convert back to percentage
+    }
+    
+    # Save results
+    output_df = save_results(
+        result=(nav, log_returns, additional_data, data['roll_date'].sum()),
+        output_folder=output_folder,
+        filename="dax_variance_swap_fixed_leg.csv"
+    )
+    
+    print(f"30-day DAX variance swap fixed leg pricing complete. Number of roll-overs: {data['roll_date'].sum()}")
+    return (nav, log_returns, additional_data, data['roll_date'].sum())
+
+def price_asian_put_option(data, output_folder='Derivatives/ASIAN_Option'):
+    """Price 3-month Asian Put option on Nikkei and save results"""
+    print("Pricing 3-month Asian Put option on Nikkei...")
+    
+    # Monte Carlo Parameters
+    NOTIONAL = 100
+    DAYS_IN_OPTION = 63  # Approx. 3 months assuming all days are trading days
+    MC_PATHS = 2000
+    np.random.seed(42)
+    
+    # Clean and convert data
+    cols = ['Nikkei_spot', 'NKY_30D_ivol', 'NKY_Div_yield', 'Basic_Loan_Rate_JPY']
+    data = clean_numeric_data(data, cols)
+    
+    # Convert percentage columns to decimals
+    data['NKY_30D_ivol'] = data['NKY_30D_ivol'] / 100
+    data['NKY_Div_yield'] = data['NKY_Div_yield'] / 100
+    data['Basic_Loan_Rate_JPY'] = data['Basic_Loan_Rate_JPY'] / 100
+    
+    # Initialize containers
+    data['asian_put_price'] = np.nan
+    data['roll_date'] = False
+    data['days_to_maturity'] = 0
+    
+    # Pricing function using Monte Carlo simulation
+    def price_asian_put_mc(S0, K, r, q, sigma, T, steps=63, paths=1000):
+        dt = T / steps
+        drift = (r - q - 0.5 * sigma ** 2) * dt
+        diffusion = sigma * np.sqrt(dt)
+
+        # Simulate paths
+        Z = np.random.randn(paths, steps)
+        price_paths = S0 * np.exp(np.cumsum(drift + diffusion * Z, axis=1))
+
+        # Arithmetic average of each path
+        average_price = np.mean(price_paths, axis=1)
+
+        # Asian put payoff
+        payoff = np.maximum(K - average_price, 0)
+
+        # Discounted expected payoff
+        return np.exp(-r * T) * np.mean(payoff)
+    
+    # Simulate rolling 3-month Asian puts
+    current_start = data.index[0]
+    
+    while current_start + pd.Timedelta(days=DAYS_IN_OPTION - 1) <= data.index[-1]:
+        current_end = current_start + pd.Timedelta(days=DAYS_IN_OPTION - 1)
+        date_range = data.loc[current_start:current_end].index
+        
+        for i, date in enumerate(date_range):
+            if i == 0:
+                data.loc[date, 'roll_date'] = True
+            data.loc[date, 'days_to_maturity'] = DAYS_IN_OPTION - i
+            
+            # Ensure valid data
+            if pd.notna(data.loc[date, 'Nikkei_spot']) and pd.notna(data.loc[date, 'NKY_30D_ivol']) \
+               and pd.notna(data.loc[date, 'Basic_Loan_Rate_JPY']) and pd.notna(data.loc[date, 'NKY_Div_yield']):
+                
+                S0 = data.loc[date, 'Nikkei_spot']
+                sigma = data.loc[date, 'NKY_30D_ivol']
+                r = data.loc[date, 'Basic_Loan_Rate_JPY']
+                q = data.loc[date, 'NKY_Div_yield']
+                T = (DAYS_IN_OPTION - i) / 252.0  # Assuming 252 trading days
+                
+                K = S0  # ATM strike
+                
+                option_price = price_asian_put_mc(S0, K, r, q, sigma, T, steps=DAYS_IN_OPTION - i, paths=MC_PATHS)
+                data.loc[date, 'asian_put_price'] = option_price
+        
+        # Move start date to the day after current option expires
+        current_start = current_end + pd.Timedelta(days=1)
+    
+    # Calculate returns
+    data['daily_returns'] = data['asian_put_price'].pct_change()
+    data['log_returns'] = np.log(data['asian_put_price'] / data['asian_put_price'].shift(1))
+    
+    # Adjust returns on roll dates
+    for i in range(1, len(data)):
+        if data['roll_date'].iloc[i]:
+            prev_price = data['asian_put_price'].iloc[i-1]
+            new_price = data['asian_put_price'].iloc[i]
+            if not np.isnan(prev_price) and not np.isnan(new_price):
+                roll_yield = (new_price - prev_price) / prev_price
+                data.loc[data.index[i], 'daily_returns'] = roll_yield
+    
+    # Compute NAV
+    nav = pd.Series(index=data.index, name='Asian_Put_NAV')
+    nav.iloc[0] = NOTIONAL
+    for i in range(1, len(nav)):
+        if not np.isnan(data['daily_returns'].iloc[i]):
+            nav.iloc[i] = nav.iloc[i-1] * (1 + data['daily_returns'].iloc[i])
+        else:
+            nav.iloc[i] = nav.iloc[i-1]
+    
+    # Create a named log_returns series
+    log_returns = pd.Series(data['log_returns'].values, index=data.index, name='Asian_Put_NAV')
+    
+    # Additional data for output
+    additional_data = {
+        'Asian_Put_Price': data['asian_put_price'].values,
+        'Days_to_Maturity': data['days_to_maturity'].values,
+        'Roll_Date': data['roll_date'].values,
+        'Nikkei_Spot': data['Nikkei_spot'].values,
+        'Volatility_%': data['NKY_30D_ivol'].values * 100,
+        'Dividend_Yield_%': data['NKY_Div_yield'].values * 100,
+        'Risk_Free_Rate_%': data['Basic_Loan_Rate_JPY'].values * 100
+    }
+    
+    # Save results
+    output_df = save_results(
+        result=(nav, log_returns, additional_data, data['roll_date'].sum()),
+        output_folder=output_folder,
+        filename="asian_put_nikkei_data.csv"
+    )
+    
+    print(f"3-month Asian Put option on Nikkei pricing complete. Number of roll-overs: {data['roll_date'].sum()}")
+    return (nav, log_returns, additional_data, data['roll_date'].sum())
+
+def price_ford_cds(data, output_folder='Derivatives/5Year_CDS_Ford'):
+    """Price 5-year Ford CDS and save results"""
+    print("Pricing 5-year Ford CDS...")
+    
+    # Constants
+    NOTIONAL = 100
+    MATURITY_YEARS = 5
+    ROLL_FREQUENCY_DAYS = 365  # roll annually
+    RECOVERY_RATE = 0.4
+    PAYMENTS_PER_YEAR = 4
+    DAY_COUNT = 365
+    TRANSACTION_COST = 0.002  # 0.2%
+    
+    # Clean numeric columns
+    cols = ['5_Y_ford_credit_spread', '5y_treasury_yield']
+    data = clean_numeric_data(data, cols)
+    
+    # Convert from %/bps to decimals
+    data['5_Y_ford_credit_spread'] = data['5_Y_ford_credit_spread'] / 10000  # bps to decimal
+    data['5y_treasury_yield'] = data['5y_treasury_yield'] / 100  # % to decimal
+    
+    # Initialize columns
+    data['roll_date'] = False
+    data['cds_value'] = np.nan
+    data['daily_return'] = np.nan
+    data['log_return'] = np.nan
+    
+    # Rolling CDS strategy
+    start_date = data.index[0]
+    current_roll_date = start_date
+    next_roll_date = current_roll_date + pd.Timedelta(days=ROLL_FREQUENCY_DAYS)
+    
+    # Function to compute CDS MTM value
+    def cds_value(spread, hazard_rate, r, maturity):
+        dt = 1 / PAYMENTS_PER_YEAR
+        n = int(maturity * PAYMENTS_PER_YEAR)
+        discount_factors = np.exp(-r * dt * np.arange(1, n + 1))
+        survival_probs = np.exp(-hazard_rate * dt * np.arange(1, n + 1))
+        
+        premium_leg = spread * np.sum(discount_factors * survival_probs) * NOTIONAL * dt
+        protection_leg = (1 - RECOVERY_RATE) * np.sum(discount_factors * np.diff(np.insert(survival_probs, 0, 1))) * NOTIONAL
+        
+        return premium_leg - protection_leg
+    
+    # Initialize NAV series
+    nav = pd.Series(index=data.index, name='NAV_5Y_CDS_Ford')
+    nav.iloc[0] = NOTIONAL
+    
+    # Loop through data
+    for i in range(1, len(data)):
+        current_date = data.index[i]
+        previous_date = data.index[i - 1]
+        
+        if current_date >= next_roll_date:
+            data.loc[current_date, 'roll_date'] = True
+            current_roll_date = current_date
+            next_roll_date = current_roll_date + pd.Timedelta(days=ROLL_FREQUENCY_DAYS)
+        
+        spread = data.loc[current_date, '5_Y_ford_credit_spread']
+        r = data.loc[current_date, '5y_treasury_yield']
+        
+        if not np.isnan(spread) and not np.isnan(r):
+            hazard_rate = spread / (1 - RECOVERY_RATE)
+            value = cds_value(spread, hazard_rate, r, MATURITY_YEARS)
+            data.loc[current_date, 'cds_value'] = value
+            
+            prev_value = data.loc[previous_date, 'cds_value']
+            if not np.isnan(prev_value) and prev_value > 0:
+                gross_return = (value - prev_value) / prev_value
+                if data.loc[current_date, 'roll_date']:
+                    gross_return -= TRANSACTION_COST
+                data.loc[current_date, 'daily_return'] = gross_return
+                data.loc[current_date, 'log_return'] = np.log(value / prev_value)
+    
+    # NAV Computation
+    for i in range(1, len(nav)):
+        prev = nav.iloc[i - 1]
+        ret = data['daily_return'].iloc[i]
+        nav.iloc[i] = prev * (1 + ret) if not np.isnan(ret) else prev
+    
+    # Create a named log_returns series
+    log_returns = pd.Series(data['log_return'].values, index=data.index, name='Ford_5Y_CDS')
+    
+    # Additional data for output
+    additional_data = {
+        'CDS_Value': data['cds_value'].values,
+        'Roll_Date': data['roll_date'].values,
+        'Ford_CDS_Spread_bps': data['5_Y_ford_credit_spread'].values * 10000,
+        '5Y_Treasury_Yield_%': data['5y_treasury_yield'].values * 100
+    }
+    
+    # Save results
+    output_df = save_results(
+        result=(nav, log_returns, additional_data, data['roll_date'].sum()),
+        output_folder=output_folder,
+        filename="ford_5y_cds_rolling.csv"
+    )
+    
+    print(f"5-year Ford CDS pricing complete. Number of roll-overs: {data['roll_date'].sum()}")
+    return (nav, log_returns, additional_data, data['roll_date'].sum())
+
+def price_spx_barrier_option(data, output_folder='Derivatives/SPX_Barrier_option'):
+    """Price 30-day S&P 500 Knock-Out Call Option and save results"""
+    print("Pricing 30-day S&P 500 Knock-Out Call Option...")
+    
+    # Constants
+    NOTIONAL = 100
+    MATURITY_DAYS = 30
+    ANNUAL_BASIS = 365.0
+    TRANSACTION_COST = 0.003  # 0.3%
+    BARRIER_MULTIPLIER = 1.1  # 110% knock-out level
+    MIN_OPTION_VALUE = 1e-6   # Minimum option value to prevent numerical issues
+    
+    # Black-Scholes call pricing function
+    def black_scholes_call(S, K, T, r, sigma, q):
+        if T <= 0 or sigma <= 0 or S <= 0:
+            return 0.0
+        d1 = (np.log(S / K) + (r - q + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
+        d2 = d1 - sigma * np.sqrt(T)
+        return S * np.exp(-q * T) * norm.cdf(d1) - K * np.exp(-r * T) * norm.cdf(d2)
+    
+    # Clean and convert data
+    cols = ['sp500_index', 'SPX_Div_yield', 'vix_index_level', 'fed_funds_rate']
+    data = clean_numeric_data(data, cols)
+    
+    # Convert percentage columns to decimals
+    data['SPX_Div_yield'] = data['SPX_Div_yield'] / 100
+    data['fed_funds_rate'] = data['fed_funds_rate'] / 100
+    data['vix_index_level'] = data['vix_index_level'] / 100  # VIX in %
+    
+    # Initialize new columns
+    data['option_price'] = np.nan
+    data['strike_price'] = np.nan
+    data['barrier_level'] = np.nan
+    data['days_to_expiry'] = 0
+    data['roll_date'] = False
+    data['knocked_out'] = False
+    
+    # Rolling logic
+    start_date = data.index[0]
+    current_expiry = start_date + pd.Timedelta(days=MATURITY_DAYS)
+    current_strike = data.loc[start_date, 'sp500_index']
+    current_barrier = BARRIER_MULTIPLIER * current_strike
+    
+    for i in range(len(data)):
+        current_date = data.index[i]
+        spot = data.loc[current_date, 'sp500_index']
+        
+        data.loc[current_date, 'strike_price'] = current_strike
+        data.loc[current_date, 'barrier_level'] = current_barrier
+        
+        if current_date >= current_expiry:
+            data.loc[current_date, 'roll_date'] = True
+            current_expiry = current_date + pd.Timedelta(days=MATURITY_DAYS)
+            current_strike = data.loc[current_date, 'sp500_index']
+            current_barrier = BARRIER_MULTIPLIER * current_strike
+        
+        days_to_expiry = (current_expiry - current_date).days
+        T = days_to_expiry / ANNUAL_BASIS
+        data.loc[current_date, 'days_to_expiry'] = days_to_expiry
+        
+        sigma = data.loc[current_date, 'vix_index_level']
+        r = data.loc[current_date, 'fed_funds_rate']
+        q = data.loc[current_date, 'SPX_Div_yield']
+        K = data.loc[current_date, 'strike_price']
+        B = data.loc[current_date, 'barrier_level']
+        
+        if spot >= B:
+            data.loc[current_date, 'option_price'] = 0.0
+            data.loc[current_date, 'knocked_out'] = True
+        elif not np.isnan(spot) and not np.isnan(sigma) and not np.isnan(r):
+            price = black_scholes_call(spot, K, T, r, sigma, q)
+            data.loc[current_date, 'option_price'] = price
+    
+    # Calculate returns
+    data['daily_return'] = data['option_price'].pct_change()
+    data['log_return'] = np.log(data['option_price'] / data['option_price'].shift(1))
+    
+    # Adjust return on roll dates
+    for i in range(1, len(data)):
+        if data['roll_date'].iloc[i]:
+            prev = data['option_price'].iloc[i - 1]
+            curr = data['option_price'].iloc[i]
+            if prev > 0:
+                data.loc[data.index[i], 'daily_return'] = (curr - prev) / prev - TRANSACTION_COST
+    
+    # Compute NAV
+    nav = pd.Series(index=data.index, name='SPX_KnockOut_Call')
+    nav.iloc[0] = NOTIONAL
+    for i in range(1, len(nav)):
+        ret = data['daily_return'].iloc[i]
+        nav.iloc[i] = nav.iloc[i - 1] * (1 + ret) if not np.isnan(ret) else nav.iloc[i - 1]
+    
+    # Create a named log_returns series
+    log_returns = pd.Series(data['log_return'].values, index=data.index, name='SPX_KnockOut_Call')
+    
+    # Additional data for output
+    additional_data = {
+        'Option_Price': data['option_price'].values,
+        'Strike_Price': data['strike_price'].values,
+        'Barrier_Level': data['barrier_level'].values,
+        'Spot': data['sp500_index'].values,
+        'Roll_Date': data['roll_date'].values,
+        'Knocked_Out': data['knocked_out'].values,
+        'Fed_Funds_Rate': data['fed_funds_rate'].values * 100,
+        'Dividend_Yield': data['SPX_Div_yield'].values * 100,
+        'Implied_Volatility': data['vix_index_level'].values * 100
+    }
+    
+    # Save results
+    output_df = save_results(
+        result=(nav, log_returns, additional_data, data['roll_date'].sum()),
+        output_folder=output_folder,
+        filename="spx_knockout_call_option.csv"
+    )
+    
+    print(f"30-day S&P 500 Knock-Out Call Option pricing complete. Number of roll-overs: {data['roll_date'].sum()}, Knock-Outs: {sum(data['knocked_out'])}")
+    return (nav, log_returns, additional_data, data['roll_date'].sum())
+
+###############################################################################
 #                              MAIN EXECUTION                                 #
 ###############################################################################
 
@@ -2207,6 +2641,26 @@ def main():
     price_instrument(data, price_usdjpy_atm_put_option, 
                     ['fx_usdjpy_rate', 'USD-JPY_IVOL', 'fed_funds_rate', 'Basic_Loan_Rate_JPY'], 
                     'USDJPY_ATM_Put', pricing_results)
+    
+    # 3.10. DAX 30-day Variance Swap (fixed leg)
+    price_instrument(data, price_variance_swap_dax, 
+                    ['DAX_Call_ivol_30D', 'DAX_Put_ivol_30D'], 
+                    'DAX_Variance_Swap', pricing_results)
+    
+    # 3.11. Nikkei 3-month Asian Put Option
+    price_instrument(data, price_asian_put_option, 
+                    ['Nikkei_spot', 'NKY_30D_ivol', 'NKY_Div_yield', 'Basic_Loan_Rate_JPY'], 
+                    'Nikkei_Asian_Put', pricing_results)
+    
+    # 3.12. Ford 5-year CDS
+    price_instrument(data, price_ford_cds, 
+                    ['5_Y_ford_credit_spread', '5y_treasury_yield'], 
+                    'Ford_5Y_CDS', pricing_results)
+    
+    # 3.13. S&P 500 Knock-Out Call Option
+    price_instrument(data, price_spx_barrier_option, 
+                    ['sp500_index', 'SPX_Div_yield', 'vix_index_level', 'fed_funds_rate'], 
+                    'SPX_KnockOut_Call', pricing_results)
     
     # 4. Price forex
     # 4.1. GBP/USD Forward (6 month)
