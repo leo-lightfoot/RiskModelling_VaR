@@ -35,6 +35,10 @@ class Portfolio:
             # Load the combined data
             combined_data = pd.read_csv(combined_file, index_col='date', parse_dates=True)
             
+            # Store the original trading dates from the source data
+            self.trading_dates = combined_data.index.unique()
+            print(f"Input file contains {len(self.trading_dates)} unique trading dates")
+            
             # Parse all NAV and return columns
             nav_cols = [col for col in combined_data.columns if col.startswith('NAV_')]
             return_cols = [col for col in combined_data.columns if col.startswith('LogReturn_')]
@@ -125,16 +129,36 @@ class Portfolio:
         # If user provided start date is after the earliest data point, use that instead
         if self.start_date > start_date:
             start_date = self.start_date
-            
-        # Create a common daily date range
-        daily_range = pd.date_range(start=start_date, end=end_date, freq='D')
         
-        # Reindex all datasets to the same daily range
+        # Get the exact list of trading dates from the input file 
+        # that fall within our date range
+        if hasattr(self, 'trading_dates'):
+            valid_trading_dates = self.trading_dates[
+                (self.trading_dates >= start_date) & 
+                (self.trading_dates <= end_date)
+            ]
+            print(f"Valid trading dates after alignment: {len(valid_trading_dates)}")
+        else:
+            # As a fallback, construct from the first instrument
+            first_instrument = next(iter(self.instruments.values()))
+            valid_trading_dates = first_instrument.index[
+                (first_instrument.index >= start_date) & 
+                (first_instrument.index <= end_date)
+            ]
+        
+        # Filter all datasets to exactly the same set of trading dates
         for name, data in self.instruments.items():
             if data is not None and not data.empty:
-                self.instruments[name] = data.reindex(daily_range).fillna(method='ffill')
+                # Only keep rows for valid trading dates
+                self.instruments[name] = data.reindex(valid_trading_dates)
         
-        print(f"Datasets aligned with {len(daily_range)} daily observations from {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}")
+        # Count actual trading days after alignment
+        sample_instrument = next(iter(self.instruments.values()))
+        if sample_instrument is not None and not sample_instrument.empty:
+            num_trading_days = len(sample_instrument)
+            print(f"Datasets aligned with {num_trading_days} trading days from {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}")
+        else:
+            print("Warning: No data available after alignment")
 
     def add_instrument(self, name, data_path=None, data=None):
         """Add a new instrument to the portfolio
@@ -216,6 +240,7 @@ class Portfolio:
         # Get common date range for all instruments
         start_dates = []
         end_dates = []
+        
         for name, data in self.instruments.items():
             if data is not None and not data.empty:
                 start_dates.append(data.index.min())
@@ -234,8 +259,16 @@ class Portfolio:
         
         print(f"Calculating portfolio returns from {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}")
         
-        # Create a complete daily date range
-        daily_range = pd.date_range(start=start_date, end=end_date, freq='D')
+        # Get the trading dates from the aligned datasets
+        # This ensures we're using the exact same set of dates across all instruments
+        sample_instrument = next(iter(self.instruments.values()))
+        if sample_instrument is None or sample_instrument.empty:
+            print("Error: No data available for return calculation.")
+            return None
+            
+        # Get dates from the sample instrument - these should all be aligned already
+        trading_dates = sample_instrument.index.tolist()
+        print(f"Using {len(trading_dates)} trading days from the aligned dataset")
         
         # Calculate daily cash return (compounded daily)
         daily_cash_return = (1 + cash_rate) ** (1/252) - 1
@@ -248,12 +281,15 @@ class Portfolio:
         instrument_shares = {}
         for name, amount in initial_allocations.items():
             if name in self.instruments and self.instruments[name] is not None:
-                first_valid_date = self.instruments[name].first_valid_index()
-                if first_valid_date is not None and 'NAV' in self.instruments[name].columns:
-                    initial_price = self.instruments[name].loc[first_valid_date, 'NAV']
-                    if initial_price > 0:
-                        # Calculate shares based on initial allocation and price
-                        instrument_shares[name] = amount / initial_price
+                if not self.instruments[name].empty:
+                    first_valid_date = self.instruments[name].first_valid_index()
+                    if first_valid_date is not None and 'NAV' in self.instruments[name].columns:
+                        initial_price = self.instruments[name].loc[first_valid_date, 'NAV']
+                        if initial_price > 0:
+                            # Calculate shares based on initial allocation and price
+                            instrument_shares[name] = amount / initial_price
+                        else:
+                            instrument_shares[name] = 0
                     else:
                         instrument_shares[name] = 0
                 else:
@@ -269,23 +305,31 @@ class Portfolio:
         return_records = []
         
         prev_total_nav = sum(initial_allocations.values()) + cash_allocation
+        prev_date = None
         
-        for date in daily_range:
+        for date in trading_dates:
+            # For cash returns, calculate based on days since last trading day
+            if prev_date is not None:
+                days_since_last = (date - prev_date).days
+                period_cash_return = (1 + cash_rate) ** (days_since_last/365) - 1
+                cash_nav = cash_nav * (1 + period_cash_return)
+            
             # Calculate current NAV for each instrument based on shares and current price
             for name, shares in instrument_shares.items():
-                if name in self.instruments and self.instruments[name] is not None and date in self.instruments[name].index:
-                    if 'NAV' in self.instruments[name].columns and not pd.isna(self.instruments[name].loc[date, 'NAV']):
+                if name in self.instruments and self.instruments[name] is not None:
+                    if date in self.instruments[name].index and 'NAV' in self.instruments[name].columns:
                         current_price = self.instruments[name].loc[date, 'NAV']
-                        instrument_navs[name] = shares * current_price
+                        if not pd.isna(current_price):
+                            instrument_navs[name] = shares * current_price
+                        else:
+                            # If NAV not available for this date, use previous NAV
+                            instrument_navs[name] = instrument_navs.get(name, initial_allocations.get(name, 0))
                     else:
-                        # If NAV not available for this date, use previous NAV
+                        # If instrument data not available for this date, use previous NAV
                         instrument_navs[name] = instrument_navs.get(name, initial_allocations.get(name, 0))
                 else:
-                    # If instrument data not available for this date, use previous NAV
+                    # Instrument not in portfolio
                     instrument_navs[name] = instrument_navs.get(name, initial_allocations.get(name, 0))
-            
-            # Update cash NAV
-            cash_nav = cash_nav * (1 + daily_cash_return)
             
             # Calculate total portfolio NAV
             total_nav = sum(instrument_navs.values()) + cash_nav
@@ -307,10 +351,14 @@ class Portfolio:
             
             # Update previous values for next iteration
             prev_total_nav = total_nav
+            prev_date = date
         
         # Create history DataFrames
         self.nav_history = pd.DataFrame(nav_records).set_index('Date')
         self.returns_history = pd.DataFrame(return_records).set_index('Date')
+        
+        # Verify the number of rows in the output matches the expected number of trading days
+        print(f"Generated {len(self.nav_history)} NAV records and {len(self.returns_history)} return records")
         
         # Update current capital to latest NAV
         self.current_capital = total_nav

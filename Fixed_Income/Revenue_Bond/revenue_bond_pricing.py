@@ -12,7 +12,7 @@ NOTIONAL = 100
 COUPON_RATE = 0.04  # 4% annual
 FREQUENCY = 2  # Semiannual payments
 ISSUE_DATE = pd.Timestamp("2005-01-01")
-FINAL_MATURITY = pd.Timestamp("2034-01-01")
+FINAL_MATURITY = pd.Timestamp("2035-01-01")
 SPREAD = 0.008  # 80 bps
 
 def calculate_bond_price(yield_rate, coupon_rate, years_to_maturity, frequency=2):
