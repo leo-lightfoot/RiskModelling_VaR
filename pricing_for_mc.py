@@ -421,4 +421,436 @@ class SimplifiedPricing:
         
         return forward_rate
 
+    #----------------------------------
+    # Credit Default Swap Pricing
+    #----------------------------------
+    
+    def price_cds(self, credit_spread, risk_free_rate, current_date=None, previous_date=None, 
+                maturity_years=5, recovery_rate=0.4, payments_per_year=4, roll_frequency_days=365, 
+                notional=100, transaction_cost=0.002, previous_value=None):
+        """
+        Price a Credit Default Swap (CDS) with rolling strategy logic
+        
+        """
+        from datetime import timedelta
+        
+        result = {}
+        
+        # Check for valid input
+        if np.isnan(credit_spread) or np.isnan(risk_free_rate):
+            result['cds_value'] = np.nan
+            result['hazard_rate'] = np.nan
+            result['roll_date'] = False
+            result['daily_return'] = np.nan
+            result['log_return'] = np.nan
+            result['nav'] = notional if previous_date is None else np.nan
+            return result
+            
+        # Compute hazard rate from spread
+        hazard_rate = credit_spread / (1 - recovery_rate)
+        result['hazard_rate'] = hazard_rate
+        
+        # Compute CDS value using the internal pricing function
+        dt = 1 / payments_per_year
+        n = int(maturity_years * payments_per_year)
+        discount_factors = np.exp(-risk_free_rate * dt * np.arange(1, n + 1))
+        survival_probs = np.exp(-hazard_rate * dt * np.arange(1, n + 1))
+        
+        premium_leg = credit_spread * np.sum(discount_factors * survival_probs) * notional * dt
+        protection_leg = (1 - recovery_rate) * np.sum(discount_factors * np.diff(np.insert(survival_probs, 0, 1))) * notional
+        
+        cds_value = premium_leg - protection_leg
+        result['cds_value'] = cds_value
+        
+        # Roll date logic
+        result['roll_date'] = False
+        
+        if current_date is not None and previous_date is not None:
+            # Check if the current date is a roll date based on roll frequency
+            next_roll_date = previous_date + timedelta(days=roll_frequency_days)
+            if current_date >= next_roll_date:
+                result['roll_date'] = True
+                
+            # Calculate returns if we have the previous value
+            if previous_value is not None and not np.isnan(previous_value) and previous_value > 0:
+                gross_return = (cds_value - previous_value) / previous_value
+                
+                # Apply transaction cost on roll dates
+                if result['roll_date']:
+                    gross_return -= transaction_cost
+                    
+                result['daily_return'] = gross_return
+                result['log_return'] = np.log(cds_value / previous_value)
+                
+                # Calculate NAV (assume previous_nav passed in if needed)
+                result['nav'] = notional * (1 + gross_return)
+            else:
+                result['daily_return'] = 0
+                result['log_return'] = 0
+                result['nav'] = notional
+        else:
+            # For the first date, no return calculation
+            result['daily_return'] = 0
+            result['log_return'] = 0
+            result['nav'] = notional
+            
+        return result
+    
+    #----------------------------------
+    # Variance Swap Pricing
+    #----------------------------------
+    
+    def price_variance_swap(self, call_ivol, put_ivol, current_date=None, previous_date=None, maturity_days=30, 
+                          notional=100, annual_basis=365.0, transaction_cost=0.002):
+        """
+        Price a variance swap with rollover logic
+        
+        """
+        from datetime import timedelta
+        
+        result = {}
+        
+        # Check for valid input
+        if np.isnan(call_ivol) or np.isnan(put_ivol):
+            result['fixed_variance'] = np.nan
+            result['fixed_vol'] = np.nan
+            result['daily_return'] = 0.0
+            result['roll_date'] = False
+            result['days_to_expiry'] = 0
+            result['nav'] = notional if previous_date is None else np.nan
+            return result
+        
+        # Calculate fixed leg (variance strike) as average squared vol
+        avg_ivol = 0.5 * (call_ivol + put_ivol)
+        fixed_var = avg_ivol ** 2
+        
+        result['fixed_variance'] = fixed_var
+        result['fixed_vol'] = avg_ivol
+        
+        # Roll date logic
+        result['roll_date'] = False
+        result['days_to_expiry'] = maturity_days
+        
+        if current_date is not None:
+            if previous_date is not None:
+                # If we have a previous date, check if this is a roll date
+                # based on the original contract expiry
+                current_expiry = previous_date + timedelta(days=maturity_days)
+                if current_date >= current_expiry:
+                    result['roll_date'] = True
+                    # Reset expiry from current date
+                    current_expiry = current_date + timedelta(days=maturity_days)
+            else:
+                # If this is the first date, set expiry
+                current_expiry = current_date + timedelta(days=maturity_days)
+                
+            # Calculate days to expiry
+            days_to_expiry = (current_expiry - current_date).days
+            result['days_to_expiry'] = days_to_expiry
+        
+        # Calculate daily return from fixed variance (matching original code)
+        daily_return = fixed_var / annual_basis
+        
+        # Apply transaction cost on roll dates
+        if result['roll_date']:
+            daily_return -= transaction_cost
+            
+        result['daily_return'] = daily_return
+        result['log_return'] = np.log(1 + daily_return)
+        
+        # Calculate NAV if previous NAV provided
+        if previous_date is not None:
+            result['nav'] = notional * (1 + daily_return) 
+        else:
+            result['nav'] = notional
+            
+        return result
+    
+    #----------------------------------
+    # Asian Option Pricing
+    #----------------------------------
+    
+    def price_asian_option(self, spot, strike=None, risk_free_rate=0, dividend_yield=0, volatility=0, 
+                          current_date=None, previous_date=None, option_type='put',
+                          days_in_option=63, paths=2000, notional=100, seed=42):
+        """
+        Price an Asian option with rollover logic using Monte Carlo simulation
+        
+        """
+        from datetime import timedelta
+        import numpy as np
+        
+        result = {}
+        
+        # Check for valid inputs
+        if np.isnan(spot) or np.isnan(volatility) or np.isnan(risk_free_rate) or np.isnan(dividend_yield):
+            result['option_price'] = np.nan
+            result['days_to_maturity'] = 0
+            result['roll_date'] = False
+            result['daily_return'] = np.nan
+            result['log_return'] = np.nan
+            result['nav'] = notional
+            return result
+            
+        # If strike not provided, use ATM
+        if strike is None:
+            strike = spot
+            
+        result['strike'] = strike
+        
+        # Roll date logic
+        result['roll_date'] = False
+        days_to_maturity = days_in_option
+        
+        if current_date is not None:
+            if previous_date is not None:
+                # Determine if we need to roll based on original contract expiry
+                # In the original code, a roll happens at the start of a new period
+                # which starts the day after the previous option expires
+                
+                # Calculate when the previous option would end (if any)
+                if hasattr(previous_date, 'current_end'):
+                    previous_end = previous_date.current_end
+                else:
+                    previous_end = previous_date + timedelta(days=days_in_option - 1)
+                    
+                # If current date is after or on the expiry, it's a roll date
+                if current_date > previous_end:
+                    result['roll_date'] = True
+                    # Set new expiry
+                    current_end = current_date + timedelta(days=days_in_option - 1)
+                else:
+                    # Continue with existing contract
+                    current_end = previous_end
+                
+                # Calculate days remaining
+                days_to_maturity = (current_end - current_date).days + 1  # +1 because we include current day
+            else:
+                # First date, start new contract
+                result['roll_date'] = True
+                days_to_maturity = days_in_option
+                
+        result['days_to_maturity'] = days_to_maturity
+        
+        # Set seed for reproducibility
+        if seed is not None:
+            np.random.seed(seed)
+        
+        # Calculate time parameters
+        T = days_to_maturity / 252.0  # Assuming 252 trading days per year
+        
+        # Use remaining days as steps, capped at original days_in_option
+        steps = min(days_to_maturity, days_in_option)
+        
+        if steps <= 0 or T <= 0:
+            # Option at or past expiry
+            if option_type.lower() == 'put':
+                result['option_price'] = max(strike - spot, 0)
+            else:
+                result['option_price'] = max(spot - strike, 0)
+        else:
+            # Price using Monte Carlo
+            dt = T / steps
+            drift = (risk_free_rate - dividend_yield - 0.5 * volatility ** 2) * dt
+            diffusion = volatility * np.sqrt(dt)
+            
+            # Simulate price paths
+            Z = np.random.randn(paths, steps)
+            price_paths = spot * np.exp(np.cumsum(drift + diffusion * Z, axis=1))
+            
+            # Calculate arithmetic average price for each path
+            average_price = np.mean(price_paths, axis=1)
+            
+            # Calculate payoff
+            if option_type.lower() == 'put':
+                payoff = np.maximum(strike - average_price, 0)
+            else:
+                payoff = np.maximum(average_price - strike, 0)
+            
+            # Calculate option price as discounted expected payoff
+            option_price = np.exp(-risk_free_rate * T) * np.mean(payoff)
+            result['option_price'] = option_price
+        
+        # Calculate returns
+        if previous_date is not None and 'previous_price' in previous_date and not np.isnan(previous_date.previous_price):
+            previous_price = previous_date.previous_price
+            
+            if previous_price > 0:
+                daily_return = (result['option_price'] - previous_price) / previous_price
+                result['daily_return'] = daily_return
+                result['log_return'] = np.log(result['option_price'] / previous_price)
+                
+                # Update NAV
+                result['nav'] = notional * (1 + daily_return)
+            else:
+                result['daily_return'] = 0
+                result['log_return'] = 0
+                result['nav'] = notional
+        else:
+            # For the first date, no return calculation
+            result['daily_return'] = 0
+            result['log_return'] = 0
+            result['nav'] = notional
+            
+        # Store current date and price for next valuation
+        current_date.current_end = current_date + timedelta(days=days_in_option - 1)
+        current_date.previous_price = result['option_price']
+            
+        return result
+    
+    #----------------------------------
+    # Barrier Option Pricing
+    #----------------------------------
+    
+    def price_barrier_option(self, spot, strike=None, risk_free_rate=0, dividend_yield=0, volatility=0, 
+                           current_date=None, previous_date=None, barrier_multiplier=1.1,
+                           maturity_days=30, option_type='call', barrier_type='knockout',
+                           notional=100, transaction_cost=0.003, annual_basis=365.0):
+        """
+        Price a barrier option with rollover logic
+        
+        """
+        from datetime import timedelta
+        
+        result = {}
+        
+        # Check for valid inputs
+        if np.isnan(spot) or np.isnan(volatility) or np.isnan(risk_free_rate) or np.isnan(dividend_yield):
+            result['option_price'] = np.nan
+            result['strike_price'] = np.nan
+            result['barrier_level'] = np.nan
+            result['days_to_expiry'] = 0
+            result['roll_date'] = False
+            result['knocked_out'] = False
+            result['daily_return'] = np.nan
+            result['log_return'] = np.nan
+            result['nav'] = notional
+            return result
+            
+        # If strike not provided, use ATM
+        if strike is None:
+            strike = spot
+            
+        result['strike_price'] = strike
+        
+        # Calculate barrier level
+        barrier_level = barrier_multiplier * strike
+        result['barrier_level'] = barrier_level
+        
+        # Check for knock-out or knock-in conditions
+        result['knocked_out'] = False
+        if barrier_type.lower() == 'knockout':
+            if (option_type.lower() == 'call' and spot >= barrier_level) or \
+               (option_type.lower() == 'put' and spot <= barrier_level):
+                result['knocked_out'] = True
+        
+        # Roll date logic
+        result['roll_date'] = False
+        days_to_expiry = maturity_days
+        current_expiry = None
+        
+        if current_date is not None:
+            if previous_date is not None:
+                # In the original code, roll happens when current_date >= current_expiry
+                if hasattr(previous_date, 'current_expiry'):
+                    current_expiry = previous_date.current_expiry
+                else:
+                    current_expiry = previous_date + timedelta(days=maturity_days)
+                
+                if current_date >= current_expiry:
+                    result['roll_date'] = True
+                    # Reset for new contract
+                    current_expiry = current_date + timedelta(days=maturity_days)
+                    # With a new contract, reset strike and barrier based on current spot
+                    if strike is None:  # Only if ATM was used
+                        strike = spot
+                        result['strike_price'] = strike
+                        barrier_level = barrier_multiplier * strike
+                        result['barrier_level'] = barrier_level
+            else:
+                # First date, set expiry
+                current_expiry = current_date + timedelta(days=maturity_days)
+                result['roll_date'] = True  # First date is effectively a roll date
+                
+            # Calculate days to expiry
+            if current_expiry is not None:
+                days_to_expiry = (current_expiry - current_date).days
+                
+        result['days_to_expiry'] = days_to_expiry
+        
+        # Calculate time to maturity in years
+        T = days_to_expiry / annual_basis
+        
+        # Price the option based on whether it's knocked out/in
+        if result['knocked_out']:
+            # For knock-out option
+            result['option_price'] = 0.0
+        elif T <= 0 or volatility <= 0 or spot <= 0:
+            # Option expired or invalid parameters
+            result['option_price'] = 0.0
+        else:
+            # Price using Black-Scholes with barrier adjustment
+            # First calculate standard Black-Scholes price
+            d1 = (np.log(spot / strike) + (risk_free_rate - dividend_yield + 0.5 * volatility**2) * T) / (volatility * np.sqrt(T))
+            d2 = d1 - volatility * np.sqrt(T)
+            
+            if option_type.lower() == 'call':
+                bs_price = spot * np.exp(-dividend_yield * T) * norm.cdf(d1) - strike * np.exp(-risk_free_rate * T) * norm.cdf(d2)
+                
+                # Apply barrier adjustment
+                if barrier_type.lower() == 'knockout':
+                    # Simple adjustment for up-and-out call
+                    barrier_discount = (barrier_level - spot) / barrier_level
+                    result['option_price'] = bs_price * barrier_discount
+                else:  # 'knockin'
+                    # For knock-in, price = vanilla - knockout
+                    barrier_discount = 1 - (barrier_level - spot) / barrier_level
+                    result['option_price'] = bs_price * barrier_discount
+            else:  # 'put'
+                bs_price = strike * np.exp(-risk_free_rate * T) * norm.cdf(-d2) - spot * np.exp(-dividend_yield * T) * norm.cdf(-d1)
+                
+                # Apply barrier adjustment
+                if barrier_type.lower() == 'knockout':
+                    # Simple adjustment for down-and-out put
+                    barrier_discount = (spot - barrier_level) / spot
+                    result['option_price'] = bs_price * barrier_discount
+                else:  # 'knockin'
+                    # For knock-in, price = vanilla - knockout
+                    barrier_discount = 1 - (spot - barrier_level) / spot
+                    result['option_price'] = bs_price * barrier_discount
+        
+        # Calculate returns
+        if previous_date is not None and hasattr(previous_date, 'previous_price'):
+            previous_price = previous_date.previous_price
+            
+            if previous_price > 0:
+                # Calculate return
+                daily_return = (result['option_price'] - previous_price) / previous_price
+                
+                # Apply transaction cost on roll dates
+                if result['roll_date']:
+                    daily_return -= transaction_cost
+                    
+                result['daily_return'] = daily_return
+                result['log_return'] = np.log((result['option_price'] + 1e-10) / (previous_price + 1e-10))  # Avoid log(0)
+                
+                # Calculate NAV
+                result['nav'] = notional * (1 + daily_return)
+            else:
+                result['daily_return'] = 0
+                result['log_return'] = 0
+                result['nav'] = notional
+        else:
+            # For the first date, no return calculation
+            result['daily_return'] = 0
+            result['log_return'] = 0
+            result['nav'] = notional
+            
+        # Store info for next valuation
+        if current_date is not None:
+            current_date.current_expiry = current_expiry
+            current_date.previous_price = result['option_price']
+            
+        return result
+
 
