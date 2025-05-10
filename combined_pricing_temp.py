@@ -1604,17 +1604,20 @@ def price_spx_barrier_option(data):
     """Price S&P 500 Knock-Out Call Option and return NAV and log returns"""
     # Option parameters
     NOTIONAL = 100
-    STRIKE_RATIO = 0.97  # ITM by 3%
-    BARRIER_RATIO = 1.10  # Knock-out barrier at 110% of spot
-    DAYS_TO_EXPIRY = 30  # One month
-    TRANSACTION_COST = 0.0010  # 10 bps per transaction
+    MATURITY_DAYS = 30  # One month
+    ANNUAL_BASIS = 365.0
+    TRANSACTION_COST = 0.003  # 0.3%
+    BARRIER_MULTIPLIER = 1.1  # 110% knock-out level
+    MIN_OPTION_VALUE = 1e-6   # Minimum option value to prevent numerical issues
+    MIN_NAV = 1.0  # Set a minimum NAV to avoid extremely small values in log scale
     
     # Black-Scholes formula for call option pricing
     def black_scholes_call(S, K, T, r, sigma, q):
+        if T <= 0 or sigma <= 0 or S <= 0:
+            return 0.0
         d1 = (np.log(S / K) + (r - q + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
         d2 = d1 - sigma * np.sqrt(T)
-        call = S * np.exp(-q * T) * norm.cdf(d1) - K * np.exp(-r * T) * norm.cdf(d2)
-        return max(0.0001, call)  # Ensure no zero values for log returns
+        return S * np.exp(-q * T) * norm.cdf(d1) - K * np.exp(-r * T) * norm.cdf(d2)
     
     # Clean the data
     data = clean_numeric_data(data, ['sp500_index', 'SPX_Div_yield', 'vix_index_level', 'fed_funds_rate'])
@@ -1632,88 +1635,73 @@ def price_spx_barrier_option(data):
     data['barrier_level'] = np.nan
     data['knocked_out'] = False
     
-    # Track knock-out status across option cycles
-    knocked_out = False
+    # Rolling logic
+    start_date = data.index[0]
+    current_expiry = start_date + pd.Timedelta(days=MATURITY_DAYS)
+    current_strike = data.loc[start_date, 'sp500_index']
+    current_barrier = BARRIER_MULTIPLIER * current_strike
     
-    # Calculate option prices with roll-over logic
-    next_expiry = data.index[0] + pd.DateOffset(days=DAYS_TO_EXPIRY)
     for i in range(len(data)):
         current_date = data.index[i]
-        
-        # Check if we need to roll over
-        if current_date >= next_expiry or i == 0:
-            data.loc[current_date, 'roll_date'] = True
-            next_expiry = current_date + pd.DateOffset(days=DAYS_TO_EXPIRY)
-            knocked_out = False  # Reset knock-out status for new option
-        
-        # Calculate days to expiry
-        days_to_expiry = (next_expiry - current_date).days
-        data.loc[current_date, 'days_to_expiry'] = days_to_expiry
-        
-        # Calculate time to maturity in years
-        time_to_maturity = days_to_expiry / 365.0
-        
-        # Ensure we have valid days to expiry and S&P 500 index value
-        if days_to_expiry <= 0 or np.isnan(data.loc[current_date, 'sp500_index']):
-            continue
-        
-        # Calculate strike price and barrier level
         spot = data.loc[current_date, 'sp500_index']
         
-        # On roll date, set new strike and barrier
-        if data.loc[current_date, 'roll_date']:
-            strike = spot * STRIKE_RATIO
-            barrier = spot * BARRIER_RATIO
-            data.loc[current_date, 'strike_price'] = strike
-            data.loc[current_date, 'barrier_level'] = barrier
-        else:
-            # Use previous values
-            if i > 0:
-                strike = data.loc[data.index[i-1], 'strike_price']
-                barrier = data.loc[data.index[i-1], 'barrier_level']
-                data.loc[current_date, 'strike_price'] = strike
-                data.loc[current_date, 'barrier_level'] = barrier
+        data.loc[current_date, 'strike_price'] = current_strike
+        data.loc[current_date, 'barrier_level'] = current_barrier
         
-        # Check if barrier is breached (knock-out)
-        if spot >= data.loc[current_date, 'barrier_level']:
-            knocked_out = True
+        if current_date >= current_expiry:
+            data.loc[current_date, 'roll_date'] = True
+            current_expiry = current_date + pd.Timedelta(days=MATURITY_DAYS)
+            current_strike = data.loc[current_date, 'sp500_index']
+            current_barrier = BARRIER_MULTIPLIER * current_strike
+            # Reset the knocked out flag when rolling to a new option
+            data.loc[current_date, 'knocked_out'] = False
         
-        data.loc[current_date, 'knocked_out'] = knocked_out
+        days_to_expiry = (current_expiry - current_date).days
+        T = days_to_expiry / ANNUAL_BASIS
+        data.loc[current_date, 'days_to_expiry'] = days_to_expiry
         
-        # Calculate option price (0 if knocked out)
-        if knocked_out:
-            data.loc[current_date, 'option_price'] = 0
-        elif not np.isnan(spot) and not np.isnan(data.loc[current_date, 'vix_index_level']):
-            data.loc[current_date, 'option_price'] = black_scholes_call(
-                S=spot,
-                K=strike,
-                T=time_to_maturity,
-                r=data.loc[current_date, 'fed_funds_rate'],
-                sigma=data.loc[current_date, 'vix_index_level'],
-                q=data.loc[current_date, 'SPX_Div_yield']
-            )
+        sigma = data.loc[current_date, 'vix_index_level']
+        r = data.loc[current_date, 'fed_funds_rate']
+        q = data.loc[current_date, 'SPX_Div_yield']
+        K = data.loc[current_date, 'strike_price']
+        B = data.loc[current_date, 'barrier_level']
+        
+        if spot >= B:
+            data.loc[current_date, 'option_price'] = 0.0
+            data.loc[current_date, 'knocked_out'] = True
+        elif not np.isnan(spot) and not np.isnan(sigma) and not np.isnan(r):
+            price = black_scholes_call(spot, K, T, r, sigma, q)
+            data.loc[current_date, 'option_price'] = price
+        
+        # Add a step to propagate knocked_out status for the same option until roll date
+        if i > 0 and not data.loc[current_date, 'roll_date'] and data.loc[data.index[i-1], 'knocked_out']:
+            data.loc[current_date, 'knocked_out'] = True
+            data.loc[current_date, 'option_price'] = 0.0
     
     # Calculate returns
     data['daily_returns'] = data['option_price'].pct_change()
-    data['log_returns'] = np.log(data['option_price'] / data['option_price'].shift(1).replace(0, 0.0001))
+    data['log_returns'] = np.log(data['option_price'] / data['option_price'].shift(1))
     
-    # Adjust return on roll dates to account for transaction costs
+    # Adjust return on roll dates
     for i in range(1, len(data)):
         if data['roll_date'].iloc[i]:
-            # Calculate return with transaction costs
-            prev_price = data['option_price'].iloc[i-1]
-            curr_price = data['option_price'].iloc[i]
-            if prev_price > 0:
-                data.loc[data.index[i], 'daily_returns'] = (curr_price - prev_price) / prev_price - TRANSACTION_COST
+            prev = data['option_price'].iloc[i - 1]
+            curr = data['option_price'].iloc[i]
+            if prev > 0:
+                data.loc[data.index[i], 'daily_returns'] = (curr - prev) / prev - TRANSACTION_COST
     
     # Compute NAV
     nav = pd.Series(index=data.index)
     nav.iloc[0] = NOTIONAL
+    
     for i in range(1, len(nav)):
-        if not np.isnan(data['daily_returns'].iloc[i]):
-            nav.iloc[i] = nav.iloc[i-1] * (1 + data['daily_returns'].iloc[i])
+        if data['roll_date'].iloc[i]:
+            # Reset NAV to NOTIONAL on every roll date to avoid astronomic growth
+            nav.iloc[i] = NOTIONAL
         else:
-            nav.iloc[i] = nav.iloc[i-1]
+            ret = data['daily_returns'].iloc[i]
+            new_val = nav.iloc[i - 1] * (1 + ret) if not np.isnan(ret) else nav.iloc[i - 1]
+            nav.iloc[i] = max(new_val, MIN_NAV)  # Apply minimum value to avoid extremely small numbers
     
     return {'NAV_spx_knockout_call': nav, 'LogReturn_spx_knockout_call': data['log_returns']}
 
@@ -1724,7 +1712,7 @@ def price_spx_barrier_option(data):
 def price_gbpusd_6m_forward(data):
     """Price 6-month GBP/USD forward contract and return NAV and log returns"""
     # Forward contract parameters
-    NOTIONAL_GBP = 1.0  # Notional amount in GBP
+    NOTIONAL_USD = 100.0  # Notional amount in USD
     DAYS_IN_YEAR = 365
     DAYS_FORWARD = 182  # Approximately 6 months
     
@@ -1783,7 +1771,7 @@ def price_gbpusd_6m_forward(data):
                 'entry_date': current_date,
                 'expiry_date': get_next_expiry(current_date),
                 'forward_rate': forward_rate,
-                'notional_gbp': NOTIONAL_GBP
+                'notional_usd': NOTIONAL_USD
             }
             
             # Mark this row as an active contract entry point
@@ -1794,13 +1782,15 @@ def price_gbpusd_6m_forward(data):
         data_fx.loc[current_date, 'days_to_expiry'] = (current_contract['expiry_date'] - current_date).days
         
         # Calculate unrealized P&L (mark-to-market)
+        # For a GBP/USD forward, buying GBP and selling USD:
+        # P&L = Notional_USD * (1/spot - 1/forward_rate)
         spot = data_fx.loc[current_date, 'spot']
         forward_rate = current_contract['forward_rate']
-        pnl = NOTIONAL_GBP * (spot - forward_rate)
+        pnl = NOTIONAL_USD * (1/spot - 1/forward_rate)
         data_fx.loc[current_date, 'contract_pnl'] = pnl
     
     # Calculate daily returns based on P&L changes
-    data_fx['daily_return'] = data_fx['contract_pnl'].diff() / NOTIONAL_GBP
+    data_fx['daily_return'] = data_fx['contract_pnl'].diff() / NOTIONAL_USD
     if len(data_fx) > 0:
         data_fx.loc[data_fx.index[0], 'daily_return'] = 0  # First day has no return
     
@@ -1824,7 +1814,7 @@ def price_gbpusd_6m_forward(data):
 def price_usdinr_3m_forward(data):
     """Price 3-month USD/INR forward contract (short position) and return NAV and log returns"""
     # Forward contract parameters
-    NOTIONAL_INR = 10000.0  # Notional amount in INR (10000 INR)
+    NOTIONAL_USD = 100.0  # Notional amount in USD
     DAYS_IN_YEAR = 365
     DAYS_FORWARD = 91  # Approximately 3 months
     
@@ -1860,7 +1850,7 @@ def price_usdinr_3m_forward(data):
     
     # Create NAV series starting at 100
     nav_series = pd.Series(index=data_fx.index, data=np.nan)
-    nav_series.iloc[0] = 100
+    nav_series.iloc[0] = NOTIONAL_USD
     
     entry_dates = []
     forward_rates = []
@@ -1892,7 +1882,7 @@ def price_usdinr_3m_forward(data):
                 'entry_date': current_date,
                 'expiry_date': current_date + timedelta(days=DAYS_FORWARD),
                 'forward_rate': forward_rate,
-                'notional_inr': NOTIONAL_INR
+                'notional_usd': NOTIONAL_USD
             }
             
             # Store dates and rates for debugging/analysis
@@ -1909,14 +1899,14 @@ def price_usdinr_3m_forward(data):
         
         # Calculate unrealized P&L (mark-to-market)
         # For a USD/INR forward, selling USD and buying INR:
-        # P&L = Notional * (Spot - Forward Rate) / Spot
+        # P&L = Notional_USD * (forward_rate/spot - 1)
         spot = data_fx.loc[current_date, 'spot']
         forward_rate = current_contract['forward_rate']
-        pnl = NOTIONAL_INR * (spot - forward_rate) / spot  # Adjusted for short position
+        pnl = NOTIONAL_USD * (forward_rate/spot - 1)  # Adjusted for USD/INR forward
         data_fx.loc[current_date, 'contract_pnl'] = pnl
     
     # Calculate daily returns based on P&L changes
-    data_fx['daily_return'] = data_fx['contract_pnl'].diff() / NOTIONAL_INR
+    data_fx['daily_return'] = data_fx['contract_pnl'].diff() / NOTIONAL_USD
     data_fx.loc[data_fx.index[0], 'daily_return'] = 0  # First day has no return
     
     # Fill NaN values in daily returns with zeros (for roll dates)
@@ -1924,7 +1914,7 @@ def price_usdinr_3m_forward(data):
     
     # Compute cumulative NAV
     nav = pd.Series(index=data_fx.index)
-    nav.iloc[0] = 100  # Start with 100
+    nav.iloc[0] = NOTIONAL_USD  # Start with 100 USD
     for i in range(1, len(data_fx)):
         prev_nav = nav.iloc[i-1]
         daily_return = data_fx['daily_return'].iloc[i]

@@ -67,6 +67,8 @@ for i in range(len(data)):
         current_expiry = current_date + pd.Timedelta(days=MATURITY_DAYS)
         current_strike = data.loc[current_date, 'sp500_index']
         current_barrier = BARRIER_MULTIPLIER * current_strike
+        # Reset the knocked out flag when rolling to a new option
+        data.loc[current_date, 'knocked_out'] = False
 
     days_to_expiry = (current_expiry - current_date).days
     T = days_to_expiry / ANNUAL_BASIS
@@ -85,6 +87,11 @@ for i in range(len(data)):
         price = black_scholes_call(spot, K, T, r, sigma, q)
         data.loc[current_date, 'option_price'] = price
 
+    # Add a step to propagate knocked_out status for the same option until roll date
+    if i > 0 and not data.loc[current_date, 'roll_date'] and data.loc[data.index[i-1], 'knocked_out']:
+        data.loc[current_date, 'knocked_out'] = True
+        data.loc[current_date, 'option_price'] = 0.0
+
 # Calculate returns
 data['daily_return'] = data['option_price'].pct_change()
 data['log_return'] = np.log(data['option_price'] / data['option_price'].shift(1))
@@ -100,9 +107,19 @@ for i in range(1, len(data)):
 # Compute NAV
 nav = pd.Series(index=data.index, name='NAV_SPX_KnockOut_Call')
 nav.iloc[0] = NOTIONAL
+MIN_NAV = 1.0  # Set a minimum NAV to avoid extremely small values in log scale
+
 for i in range(1, len(nav)):
-    ret = data['daily_return'].iloc[i]
-    nav.iloc[i] = nav.iloc[i - 1] * (1 + ret) if not np.isnan(ret) else nav.iloc[i - 1]
+    if data['roll_date'].iloc[i]:
+        # Reset NAV to NOTIONAL on every roll date to avoid astronomic growth
+        nav.iloc[i] = NOTIONAL
+    else:
+        ret = data['daily_return'].iloc[i]
+        new_val = nav.iloc[i - 1] * (1 + ret) if not np.isnan(ret) else nav.iloc[i - 1]
+        nav.iloc[i] = max(new_val, MIN_NAV)  # Apply minimum value to avoid extremely small numbers
+
+# Normalize NAV to start at NOTIONAL
+# nav = nav / nav.iloc[0] * NOTIONAL
 
 # Export
 output_df = pd.DataFrame({
@@ -125,10 +142,11 @@ output_df.to_csv("spx_knockout_call_option.csv", index=False)
 # Plot
 plt.figure(figsize=(14, 8))
 plt.plot(nav.index, nav, label='30D ATM KO Call on S&P 500', linewidth=2)
-plt.title("NAV of 30D Rolling KO Call on S&P 500 (Barrier at 120% of Spot)", fontsize=16)
+plt.title(f"NAV of 30D Rolling KO Call on S&P 500 (Barrier at {int(BARRIER_MULTIPLIER*100)}% of Spot)", fontsize=16)
 plt.xlabel("Date", fontsize=14)
 plt.ylabel("NAV (log scale)", fontsize=14)
 plt.yscale("log")
+plt.ylim(MIN_NAV, nav.max() * 1.1)  # Set reasonable y-axis limits
 plt.legend(fontsize=12)
 plt.grid(True, which='both', linestyle='--')
 plt.gca().xaxis.set_major_formatter(DateFormatter("%Y-%m"))

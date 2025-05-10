@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 plt.style.use('seaborn-v0_8-darkgrid')
 
 # Forward contract parameters
-NOTIONAL_INR = 10000.0  # Notional amount in INR (10000 INR)
+NOTIONAL_USD = 100.0  # Notional amount in USD
 DAYS_IN_YEAR = 365
 DAYS_FORWARD = 91  # Approximately 3 months
 
@@ -24,7 +24,7 @@ data = pd.read_csv(r'C:\Users\abdul\Desktop\Github Repos\RiskModelling_VaR\data_
 print("Columns in the dataset:", data.columns.tolist())
 
 # Convert date to datetime format - using the correct format from the CSV
-data['date'] = pd.to_datetime(data['Date'], format='%d-%m-%Y')
+data['date'] = pd.to_datetime(data['date'], format='%d-%m-%Y')
 
 # Set date as index
 data.set_index('date', inplace=True)
@@ -38,8 +38,8 @@ def clean_numeric_data(df, columns):
 
 # If fx_usdinr_rate doesn't exist in the dataset, we might need to create it
 # Check if the column exists
-if 'fx_usdinr_rate' not in data.columns:
-    print("Warning: 'fx_usdinr_rate' column not found in the dataset.")
+if 'USD_INR' not in data.columns:
+    print("Warning: 'USD_INR' column not found in the dataset.")
     print("Available FX columns:", [col for col in data.columns if 'fx_' in col.lower()])
     # You mentioned you added this column, so it should be there
     # If not, we would need to handle this situation differently
@@ -47,8 +47,8 @@ if 'fx_usdinr_rate' not in data.columns:
 # Clean the USD/INR spot and interest rate data
 # Use existing columns if available
 columns_to_clean = []
-if 'fx_usdinr_rate' in data.columns:
-    columns_to_clean.append('fx_usdinr_rate')
+if 'USD_INR' in data.columns:
+    columns_to_clean.append('USD_INR')
 columns_to_clean.extend(['fed_funds_rate', 'MIBOR '])  # MIBOR has a space
 
 data = clean_numeric_data(data, columns_to_clean)
@@ -58,8 +58,8 @@ column_mapping = {
     'fed_funds_rate': 'usd_rate',
     'MIBOR ': 'inr_rate'  # Note the space after MIBOR
 }
-if 'fx_usdinr_rate' in data.columns:
-    column_mapping['fx_usdinr_rate'] = 'spot'
+if 'USD_INR' in data.columns:
+    column_mapping['USD_INR'] = 'spot'
 
 data.rename(columns=column_mapping, inplace=True)
 
@@ -69,7 +69,7 @@ data['inr_rate'] = data['inr_rate'] / 100
 
 # If spot column wasn't created, we can't proceed
 if 'spot' not in data.columns:
-    raise ValueError("Required 'fx_usdinr_rate' column not found in dataset")
+    raise ValueError("Required 'USD_INR' column not found in dataset")
 
 # Drop rows with NaN values in essential columns
 data = data.dropna(subset=['spot', 'usd_rate', 'inr_rate'])
@@ -83,7 +83,7 @@ data['active_contract'] = False  # Flag for the currently active contract
 
 # Create NAV series starting at 100
 nav_series = pd.Series(index=data.index, data=np.nan)
-nav_series.iloc[0] = 100
+nav_series.iloc[0] = NOTIONAL_USD  # Start with 100 USD
 
 entry_dates = []
 forward_rates = []
@@ -115,7 +115,7 @@ for i in range(len(data)):
             'entry_date': current_date,
             'expiry_date': current_date + timedelta(days=DAYS_FORWARD),
             'forward_rate': forward_rate,
-            'notional_inr': NOTIONAL_INR
+            'notional_usd': NOTIONAL_USD
         }
         
         # Store dates and rates for debugging/analysis
@@ -132,14 +132,14 @@ for i in range(len(data)):
     
     # Calculate unrealized P&L (mark-to-market)
     # For a USD/INR forward, selling USD and buying INR:
-    # P&L = Notional * (Spot - Forward Rate) / Spot
+    # P&L = Notional_USD * (forward_rate/spot - 1)
     spot = data.loc[current_date, 'spot']
     forward_rate = current_contract['forward_rate']
-    pnl = NOTIONAL_INR * (spot - forward_rate) / spot  # Adjusted for short position
+    pnl = NOTIONAL_USD * (forward_rate/spot - 1)  # Adjusted for USD/INR forward
     data.loc[current_date, 'contract_pnl'] = pnl
 
 # Calculate daily returns based on P&L changes
-data['daily_return'] = data['contract_pnl'].diff() / NOTIONAL_INR
+data['daily_return'] = data['contract_pnl'].diff() / NOTIONAL_USD
 data.loc[data.index[0], 'daily_return'] = 0  # First day has no return
 
 # Fill NaN values in daily returns with zeros (for roll dates)
@@ -147,7 +147,7 @@ data['daily_return'].fillna(0, inplace=True)
 
 # Compute cumulative NAV
 nav_series = pd.Series(index=data.index)
-nav_series.iloc[0] = 100  # Start with 100
+nav_series.iloc[0] = NOTIONAL_USD  # Start with 100 USD
 for i in range(1, len(data)):
     prev_nav = nav_series.iloc[i-1]
     daily_return = data['daily_return'].iloc[i]

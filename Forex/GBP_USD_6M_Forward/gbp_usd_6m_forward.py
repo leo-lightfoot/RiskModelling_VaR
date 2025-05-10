@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 plt.style.use('seaborn-v0_8-darkgrid')
 
 # Forward contract parameters
-NOTIONAL_GBP = 1.0  # Notional amount in GBP
+NOTIONAL_USD = 100.0  # Notional amount in USD
 DAYS_IN_YEAR = 365
 DAYS_FORWARD = 182  # Approximately 6 months
 
@@ -59,7 +59,7 @@ data['active_contract'] = False  # Flag for the currently active contract
 
 # Create NAV series starting at 100
 nav_series = pd.Series(index=data.index, data=np.nan)
-nav_series.iloc[0] = 100
+nav_series.iloc[0] = NOTIONAL_USD  # Start with 100 USD
 
 entry_dates = []
 forward_rates = []
@@ -90,7 +90,7 @@ for i in range(len(data)):
             'entry_date': current_date,
             'expiry_date': current_date + timedelta(days=DAYS_FORWARD),
             'forward_rate': forward_rate,
-            'notional_gbp': NOTIONAL_GBP
+            'notional_usd': NOTIONAL_USD
         }
         
         # Store dates and rates for debugging/analysis
@@ -107,14 +107,14 @@ for i in range(len(data)):
     
     # Calculate unrealized P&L (mark-to-market)
     # For a GBP/USD forward, buying GBP and selling USD:
-    # P&L = Notional * (Spot - Forward Rate)
+    # P&L = Notional_USD * (1/spot - 1/forward_rate)
     spot = data.loc[current_date, 'spot']
     forward_rate = current_contract['forward_rate']
-    pnl = NOTIONAL_GBP * (spot - forward_rate)
+    pnl = NOTIONAL_USD * (1/spot - 1/forward_rate)
     data.loc[current_date, 'contract_pnl'] = pnl
 
 # Calculate daily returns based on P&L changes
-data['daily_return'] = data['contract_pnl'].diff() / NOTIONAL_GBP
+data['daily_return'] = data['contract_pnl'].diff() / NOTIONAL_USD
 data.loc[data.index[0], 'daily_return'] = 0  # First day has no return
 
 # Fill NaN values in daily returns with zeros (for roll dates)
@@ -122,7 +122,7 @@ data['daily_return'].fillna(0, inplace=True)
 
 # Compute cumulative NAV
 nav_series = pd.Series(index=data.index)
-nav_series.iloc[0] = 100  # Start with 100
+nav_series.iloc[0] = NOTIONAL_USD  # Start with 100 USD
 for i in range(1, len(data)):
     prev_nav = nav_series.iloc[i-1]
     daily_return = data['daily_return'].iloc[i]
