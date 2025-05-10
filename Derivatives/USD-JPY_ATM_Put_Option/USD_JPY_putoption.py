@@ -72,9 +72,14 @@ for i in range(len(data)):
     r_f = data.loc[current_date, 'Basic_Loan_Rate_JPY']
     K = S  # ATM Put → Strike = Spot
     
-    if not np.isnan(S) and not np.isnan(sigma) and not np.isnan(r_d) and not np.isnan(r_f):
+    if days_to_expiry == 0:
+        # Set to intrinsic value at expiry
+        price = max(K - S, 0)
+    elif not np.isnan(S) and not np.isnan(sigma) and not np.isnan(r_d) and not np.isnan(r_f):
         price = garman_kohlhagen_put(S, K, T, r_d, r_f, sigma)
-        data.loc[current_date, 'option_price'] = price
+    else:
+        price = np.nan
+    data.loc[current_date, 'option_price'] = price
 
 # Calculate returns
 data['daily_return'] = data['option_price'].pct_change()
@@ -118,8 +123,7 @@ output_df.to_csv('3m_usdjpy_put_option_data.csv', index=False)
 # Plot NAV
 plt.figure(figsize=(14, 8))
 plt.plot(nav.index, nav, label='3M USD/JPY ATM Put Option (USD)', linewidth=2)
-roll_dates = nav.index[data['roll_date']]
-plt.scatter(roll_dates, nav[roll_dates], color='red', label='Roll Dates', zorder=5)
+
 plt.title('NAV of Rolling 3M USD/JPY ATM Put Option (in USD)', fontsize=16)
 plt.xlabel('Date', fontsize=14)
 plt.ylabel('NAV (log scale)', fontsize=14)

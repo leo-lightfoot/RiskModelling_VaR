@@ -313,18 +313,19 @@ def price_10y_tips(data):
 def price_1y_eur_zcb(data):
     """Price 1-year EUR Zero Coupon Bond and return NAV and log returns"""
     # Bond parameters
-    NOTIONAL = 100  # EUR
+    INITIAL_USD = 100  # USD
     MATURITY = 1  # 1 year
+    FREQUENCY = 1  # Annual payment (zero coupon)
+    
+    def calculate_zcb_price(yield_rate, years_to_maturity):
+        """Calculate zero coupon bond price using continuous compounding"""
+        return np.exp(-yield_rate * years_to_maturity)
     
     # Clean the 1-year EUR yield and FX data
     data = clean_numeric_data(data, ['1_year_euro_yield_curve', 'fx_eurusd_rate'])
     
     # Convert yield from percentage to decimal
     data['1_year_euro_yield_curve'] = data['1_year_euro_yield_curve'] / 100
-    
-    def calculate_zcb_price(yield_rate, years_to_maturity):
-        """Calculate zero coupon bond price using continuous compounding"""
-        return NOTIONAL * np.exp(-yield_rate * years_to_maturity)
     
     # Initialize variables for bond pricing
     data['zcb_price_eur'] = np.nan
@@ -356,7 +357,8 @@ def price_1y_eur_zcb(data):
             )
     
     # Calculate returns in EUR
-    data['daily_returns_eur'] = data['zcb_price_eur'].pct_change(fill_method=None)
+    data['daily_returns_eur'] = data['zcb_price_eur'].pct_change()
+    data['log_returns_eur'] = np.log(data['zcb_price_eur'] / data['zcb_price_eur'].shift(1))
     
     # Adjust returns on roll dates to account for roll yield
     for i in range(1, len(data)):
@@ -367,7 +369,9 @@ def price_1y_eur_zcb(data):
     
     # Compute NAV in EUR
     nav_eur = pd.Series(index=data.index)
-    nav_eur.iloc[0] = NOTIONAL
+    # Convert initial USD to EUR using first available FX rate
+    initial_eur = INITIAL_USD / data['fx_eurusd_rate'].iloc[0]
+    nav_eur.iloc[0] = initial_eur
     for i in range(1, len(nav_eur)):
         if not np.isnan(data['daily_returns_eur'].iloc[i]):
             nav_eur.iloc[i] = nav_eur.iloc[i-1] * (1 + data['daily_returns_eur'].iloc[i])
@@ -375,17 +379,13 @@ def price_1y_eur_zcb(data):
             nav_eur.iloc[i] = nav_eur.iloc[i-1]
     
     # Convert NAV to USD
-    nav_usd = pd.Series(index=data.index)
     nav_usd = nav_eur * data['fx_eurusd_rate']
     
     # Calculate USD returns
-    data['daily_returns_usd'] = nav_usd.pct_change(fill_method=None)
+    data['daily_returns_usd'] = nav_usd.pct_change()
     data['log_returns_usd'] = np.log(nav_usd / nav_usd.shift(1))
     
-    # Create a log_returns series for consistency
-    log_returns = pd.Series(data['log_returns_usd'].values, index=data.index)
-    
-    return {'NAV_1y_eur_zcb': nav_usd, 'LogReturn_1y_eur_zcb': log_returns}
+    return {'NAV_1y_eur_zcb': nav_usd, 'LogReturn_1y_eur_zcb': data['log_returns_usd']}
 
 def price_high_yield_corp_debt(data):
     """Price High Yield Corporate Debt and return NAV and log returns"""
@@ -1619,6 +1619,18 @@ def price_spx_barrier_option(data):
         d2 = d1 - sigma * np.sqrt(T)
         return S * np.exp(-q * T) * norm.cdf(d1) - K * np.exp(-r * T) * norm.cdf(d2)
     
+    def monte_carlo_barrier_call(S, K, T, r, sigma, q, B, n_paths=10000, n_steps=30):
+        dt = T / n_steps
+        disc = np.exp(-r * T)
+        S_paths = np.full((n_paths, n_steps + 1), S)
+        barrier_breached = np.zeros(n_paths, dtype=bool)
+        for t in range(1, n_steps + 1):
+            z = np.random.normal(size=n_paths)
+            S_paths[:, t] = S_paths[:, t-1] * np.exp((r - q - 0.5 * sigma**2) * dt + sigma * np.sqrt(dt) * z)
+            barrier_breached |= (S_paths[:, t] >= B)
+        payoffs = np.where(barrier_breached, 0.0, np.maximum(S_paths[:, -1] - K, 0))
+        return disc * np.mean(payoffs)
+    
     # Clean the data
     data = clean_numeric_data(data, ['sp500_index', 'SPX_Div_yield', 'vix_index_level', 'fed_funds_rate'])
     
@@ -1670,7 +1682,7 @@ def price_spx_barrier_option(data):
             data.loc[current_date, 'option_price'] = 0.0
             data.loc[current_date, 'knocked_out'] = True
         elif not np.isnan(spot) and not np.isnan(sigma) and not np.isnan(r):
-            price = black_scholes_call(spot, K, T, r, sigma, q)
+            price = monte_carlo_barrier_call(spot, K, T, r, sigma, q, B)
             data.loc[current_date, 'option_price'] = price
         
         # Add a step to propagate knocked_out status for the same option until roll date

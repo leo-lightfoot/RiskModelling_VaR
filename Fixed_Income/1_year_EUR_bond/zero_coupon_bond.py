@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 plt.style.use('seaborn-v0_8-darkgrid')
 
 # Bond parameters
-NOTIONAL = 100  # EUR
+INITIAL_USD = 100  # USD
 MATURITY = 1  # 1 year
 FREQUENCY = 1  # Annual payment (zero coupon)
 
@@ -16,7 +16,7 @@ def calculate_zcb_price(yield_rate, years_to_maturity):
     """
     Calculate zero coupon bond price using continuous compounding
     """
-    return NOTIONAL * np.exp(-yield_rate * years_to_maturity)
+    return np.exp(-yield_rate * years_to_maturity)
 
 # Load the data
 data = pd.read_csv(r"C:\Users\abdul\Desktop\Github Repos\RiskModelling_VaR\data_restructured.csv")
@@ -82,7 +82,9 @@ for i in range(1, len(data)):
 
 # Compute NAV in EUR
 nav_eur = pd.Series(index=data.index, name='1_year_eur_zcb')
-nav_eur.iloc[0] = NOTIONAL
+# Convert initial USD to EUR using first available FX rate
+initial_eur = INITIAL_USD / data['fx_eurusd_rate'].iloc[0]
+nav_eur.iloc[0] = initial_eur
 for i in range(1, len(nav_eur)):
     if not np.isnan(data['daily_returns_eur'].iloc[i]):
         nav_eur.iloc[i] = nav_eur.iloc[i-1] * (1 + data['daily_returns_eur'].iloc[i])
@@ -115,7 +117,7 @@ output_df.to_csv('1_year_eur_zcb_data.csv', index=False)
 # Plot NAV in USD over time
 plt.figure(figsize=(14, 8))
 plt.plot(nav_usd.index, nav_usd, label='1-Year EUR ZCB (USD)', linewidth=2)
-plt.title('NAV of 1-Year EUR Zero Coupon Bond in USD Over Time (Starting at 100 EUR)', fontsize=16)
+plt.title('NAV of 1-Year EUR Zero Coupon Bond in USD Over Time (Starting at 100 USD)', fontsize=16)
 plt.xlabel('Date', fontsize=14)
 plt.ylabel('NAV (USD, log scale)', fontsize=14)
 plt.legend(fontsize=12)

@@ -24,6 +24,18 @@ def black_scholes_call(S, K, T, r, sigma, q):
     d2 = d1 - sigma * np.sqrt(T)
     return S * np.exp(-q * T) * norm.cdf(d1) - K * np.exp(-r * T) * norm.cdf(d2)
 
+def monte_carlo_barrier_call(S, K, T, r, sigma, q, B, n_paths=10000, n_steps=30):
+    dt = T / n_steps
+    disc = np.exp(-r * T)
+    S_paths = np.full((n_paths, n_steps + 1), S)
+    barrier_breached = np.zeros(n_paths, dtype=bool)
+    for t in range(1, n_steps + 1):
+        z = np.random.normal(size=n_paths)
+        S_paths[:, t] = S_paths[:, t-1] * np.exp((r - q - 0.5 * sigma**2) * dt + sigma * np.sqrt(dt) * z)
+        barrier_breached |= (S_paths[:, t] >= B)
+    payoffs = np.where(barrier_breached, 0.0, np.maximum(S_paths[:, -1] - K, 0))
+    return disc * np.mean(payoffs)
+
 # === LOAD DATA ===
 # Placeholder for CSV path — update this with actual file path
 data = pd.read_csv(r"C:\Users\abdul\Desktop\Github Repos\RiskModelling_VaR\data_restructured.csv")
@@ -83,8 +95,8 @@ for i in range(len(data)):
     if spot >= B:
         data.loc[current_date, 'option_price'] = 0.0
         data.loc[current_date, 'knocked_out'] = True
-    elif not np.isnan(spot) and not np.isnan(sigma) and not np.isnan(r):
-        price = black_scholes_call(spot, K, T, r, sigma, q)
+    elif not np.isnan(spot) and not np.isnan(sigma) and not np.isnan(r) and not np.isnan(q):
+        price = monte_carlo_barrier_call(spot, K, T, r, sigma, q, B)
         data.loc[current_date, 'option_price'] = price
 
     # Add a step to propagate knocked_out status for the same option until roll date
