@@ -10,9 +10,10 @@ plt.style.use('seaborn-v0_8-darkgrid')
 
 # Constants
 NOTIONAL = 100
+STRIKE_RATIO = 1.05  # ITM by 5% for put option
 MATURITY_DAYS = 90
 ANNUAL_BASIS = 365.0
-TRANSACTION_COST = 0.005  # 0.5% transaction cost on rolling
+TRANSACTION_COST = 0.0010  # 0.1% transaction cost on rolling
 
 def black_scholes_put(S, K, T, r, sigma, q):
     """Price European put using Black-Scholes-Merton."""
@@ -20,8 +21,8 @@ def black_scholes_put(S, K, T, r, sigma, q):
         return 0.0
     d1 = (np.log(S / K) + (r - q + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
     d2 = d1 - sigma * np.sqrt(T)
-    put_price = K * np.exp(-r * T) * norm.cdf(-d2) - S * np.exp(-q * T) * norm.cdf(-d1)
-    return put_price
+    put = K * np.exp(-r * T) * norm.cdf(-d2) - S * np.exp(-q * T) * norm.cdf(-d1)
+    return max(0.0001, put)  # Use a much smaller lower bound
 
 # Load and clean data
 data = pd.read_csv(r"C:\Users\abdul\Desktop\Github Repos\RiskModelling_VaR\data_restructured.csv")
@@ -48,7 +49,7 @@ data['days_to_expiry'] = 0
 # Rolling setup
 start_date = data.index[0]
 current_expiry = start_date + pd.Timedelta(days=MATURITY_DAYS)
-current_strike = 1.10 * data.loc[start_date, 'exxonmobil_stock_price']  # 110% ITM strike
+current_strike = STRIKE_RATIO * data.loc[start_date, 'exxonmobil_stock_price']
 
 for i in range(len(data)):
     current_date = data.index[i]
@@ -57,7 +58,7 @@ for i in range(len(data)):
     if current_date >= current_expiry:
         data.loc[current_date, 'roll_date'] = True
         current_expiry = current_date + pd.Timedelta(days=MATURITY_DAYS)
-        current_strike = 1.10 * data.loc[current_date, 'exxonmobil_stock_price']
+        current_strike = STRIKE_RATIO * data.loc[current_date, 'exxonmobil_stock_price']
     
     days_to_expiry = (current_expiry - current_date).days
     T = days_to_expiry / ANNUAL_BASIS
@@ -115,7 +116,7 @@ output_df.to_csv('xom_3m_itm_put_option_data.csv', index=False)
 # Plot NAV
 plt.figure(figsize=(14, 8))
 plt.plot(nav.index, nav, label='3M ITM Put on ExxonMobil', linewidth=2)
-plt.title('NAV of Rolling 3M ITM Put on ExxonMobil (Strike = 110% of Spot)', fontsize=16)
+plt.title('NAV of Rolling 3M ITM Put on ExxonMobil (Strike = 105% of Spot)', fontsize=16)
 plt.xlabel('Date', fontsize=14)
 plt.ylabel('NAV (log scale)', fontsize=14)
 plt.yscale('log')

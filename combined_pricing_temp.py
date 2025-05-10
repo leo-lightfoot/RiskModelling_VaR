@@ -1262,7 +1262,7 @@ def price_usdjpy_atm_put_option(data):
         d1 = (np.log(S / K) + (r_d - r_f + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
         d2 = d1 - sigma * np.sqrt(T)
         put = K * np.exp(-r_d * T) * norm.cdf(-d2) - S * np.exp(-r_f * T) * norm.cdf(-d1)
-        return max(0.0001, put)  # Ensure no zero values for log returns
+        return max(1.0, put)  # Set lower bound to 1.0
     
     # Clean the data
     data = clean_numeric_data(data, ['fx_usdjpy_rate', 'USD-JPY_IVOL', 'fed_funds_rate', 'Basic_Loan_Rate_JPY'])

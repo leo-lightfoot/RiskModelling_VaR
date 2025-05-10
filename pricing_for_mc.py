@@ -384,7 +384,7 @@ class SimplifiedPricing:
         
         call_price = spot * np.exp(-foreign_rate * T) * norm.cdf(d1) - strike * np.exp(-domestic_rate * T) * norm.cdf(d2)
         
-        return call_price
+        return max(0.0001, call_price)  # Ensure no zero values for log returns
     
     def garman_kohlhagen_put(self, spot, strike, days_to_expiry, domestic_rate, foreign_rate, volatility):
         """
@@ -407,19 +407,26 @@ class SimplifiedPricing:
     # Forex Forward Pricing
     #----------------------------------
     
-    def price_fx_forward(self, spot_rate, domestic_rate, foreign_rate, days_to_expiry):
+    def price_fx_forward(self, spot_rate, domestic_rate, foreign_rate, days_to_expiry, notional=100.0):
         """
         Price an FX forward contract
         
         """
         T = days_to_expiry / self.DAYS_IN_YEAR
         
-        # F = S * (1 + r_d)^T / (1 + r_f)^T for discrete compounding
-        # or F = S * e^((r_d - r_f) * T) for continuous compounding
-        # Using the continuous version for simplicity
-        forward_rate = spot_rate * np.exp((domestic_rate - foreign_rate) * T)
+        # Forward rate formula: Spot * (1 + r_foreign) / (1 + r_base)
+        forward_rate = spot_rate * (1 + domestic_rate * T) / (1 + foreign_rate * T)
         
-        return forward_rate
+        # Calculate unrealized P&L (mark-to-market)
+        # For a GBP/USD forward, buying GBP and selling USD:
+        # P&L = Notional * (1/spot - 1/forward_rate)
+        pnl = notional * (1/spot_rate - 1/forward_rate)
+        
+        return {
+            'forward_rate': forward_rate,
+            'contract_pnl': pnl,
+            'days_to_expiry': days_to_expiry
+        }
 
     #----------------------------------
     # Credit Default Swap Pricing
@@ -746,111 +753,85 @@ class SimplifiedPricing:
         
         # Roll date logic
         result['roll_date'] = False
-        days_to_expiry = maturity_days
-        current_expiry = None
+        if current_date is not None and previous_date is not None:
+            days_since_previous = (current_date - previous_date).days
+            if days_since_previous >= maturity_days:
+                result['roll_date'] = True
         
-        if current_date is not None:
-            if previous_date is not None:
-                # In the original code, roll happens when current_date >= current_expiry
-                if hasattr(previous_date, 'current_expiry'):
-                    current_expiry = previous_date.current_expiry
-                else:
-                    current_expiry = previous_date + timedelta(days=maturity_days)
-                
-                if current_date >= current_expiry:
-                    result['roll_date'] = True
-                    # Reset for new contract
-                    current_expiry = current_date + timedelta(days=maturity_days)
-                    # With a new contract, reset strike and barrier based on current spot
-                    if strike is None:  # Only if ATM was used
-                        strike = spot
-                        result['strike_price'] = strike
-                        barrier_level = barrier_multiplier * strike
-                        result['barrier_level'] = barrier_level
-            else:
-                # First date, set expiry
-                current_expiry = current_date + timedelta(days=maturity_days)
-                result['roll_date'] = True  # First date is effectively a roll date
-                
-            # Calculate days to expiry
-            if current_expiry is not None:
-                days_to_expiry = (current_expiry - current_date).days
-                
+        # Calculate time to expiry
+        days_to_expiry = maturity_days
+        if current_date is not None and previous_date is not None:
+            days_to_expiry = max(0, maturity_days - (current_date - previous_date).days)
         result['days_to_expiry'] = days_to_expiry
         
-        # Calculate time to maturity in years
-        T = days_to_expiry / annual_basis
-        
-        # Price the option based on whether it's knocked out/in
+        # Calculate option price
         if result['knocked_out']:
-            # For knock-out option
-            result['option_price'] = 0.0
-        elif T <= 0 or volatility <= 0 or spot <= 0:
-            # Option expired or invalid parameters
             result['option_price'] = 0.0
         else:
-            # Price using Black-Scholes with barrier adjustment
-            # First calculate standard Black-Scholes price
-            d1 = (np.log(spot / strike) + (risk_free_rate - dividend_yield + 0.5 * volatility**2) * T) / (volatility * np.sqrt(T))
-            d2 = d1 - volatility * np.sqrt(T)
-            
+            T = days_to_expiry / annual_basis
             if option_type.lower() == 'call':
-                bs_price = spot * np.exp(-dividend_yield * T) * norm.cdf(d1) - strike * np.exp(-risk_free_rate * T) * norm.cdf(d2)
-                
-                # Apply barrier adjustment
-                if barrier_type.lower() == 'knockout':
-                    # Simple adjustment for up-and-out call
-                    barrier_discount = (barrier_level - spot) / barrier_level
-                    result['option_price'] = bs_price * barrier_discount
-                else:  # 'knockin'
-                    # For knock-in, price = vanilla - knockout
-                    barrier_discount = 1 - (barrier_level - spot) / barrier_level
-                    result['option_price'] = bs_price * barrier_discount
-            else:  # 'put'
-                bs_price = strike * np.exp(-risk_free_rate * T) * norm.cdf(-d2) - spot * np.exp(-dividend_yield * T) * norm.cdf(-d1)
-                
-                # Apply barrier adjustment
-                if barrier_type.lower() == 'knockout':
-                    # Simple adjustment for down-and-out put
-                    barrier_discount = (spot - barrier_level) / spot
-                    result['option_price'] = bs_price * barrier_discount
-                else:  # 'knockin'
-                    # For knock-in, price = vanilla - knockout
-                    barrier_discount = 1 - (spot - barrier_level) / spot
-                    result['option_price'] = bs_price * barrier_discount
+                result['option_price'] = self.black_scholes_call(
+                    spot=spot,
+                    strike=strike,
+                    days_to_expiry=days_to_expiry,
+                    risk_free_rate=risk_free_rate,
+                    volatility=volatility,
+                    dividend_yield=dividend_yield
+                )
+            else:  # put
+                result['option_price'] = self.black_scholes_put(
+                    spot=spot,
+                    strike=strike,
+                    days_to_expiry=days_to_expiry,
+                    risk_free_rate=risk_free_rate,
+                    volatility=volatility,
+                    dividend_yield=dividend_yield
+                )
         
         # Calculate returns
-        if previous_date is not None and hasattr(previous_date, 'previous_price'):
-            previous_price = previous_date.previous_price
-            
-            if previous_price > 0:
-                # Calculate return
-                daily_return = (result['option_price'] - previous_price) / previous_price
-                
-                # Apply transaction cost on roll dates
-                if result['roll_date']:
-                    daily_return -= transaction_cost
-                    
-                result['daily_return'] = daily_return
-                result['log_return'] = np.log((result['option_price'] + 1e-10) / (previous_price + 1e-10))  # Avoid log(0)
-                
-                # Calculate NAV
-                result['nav'] = notional * (1 + daily_return)
+        if previous_date is not None:
+            if result['roll_date']:
+                # On roll date, adjust for transaction cost
+                result['daily_return'] = -transaction_cost
             else:
-                result['daily_return'] = 0
-                result['log_return'] = 0
-                result['nav'] = notional
+                # Normal daily return
+                result['daily_return'] = (result['option_price'] - result.get('previous_price', result['option_price'])) / result.get('previous_price', result['option_price'])
+            
+            result['log_return'] = np.log(1 + result['daily_return'])
         else:
-            # For the first date, no return calculation
-            result['daily_return'] = 0
-            result['log_return'] = 0
+            result['daily_return'] = 0.0
+            result['log_return'] = 0.0
+        
+        # Store current price for next calculation
+        result['previous_price'] = result['option_price']
+        
+        # Calculate NAV
+        if previous_date is None:
             result['nav'] = notional
-            
-        # Store info for next valuation
-        if current_date is not None:
-            current_date.current_expiry = current_expiry
-            current_date.previous_price = result['option_price']
-            
+        else:
+            result['nav'] = result.get('previous_nav', notional) * (1 + result['daily_return'])
+        
         return result
+
+    def price_usdinr_3m_forward(self, spot_rate, domestic_rate, foreign_rate, days_to_expiry, notional=10000.0):
+        """
+        Price a 3-month USD/INR forward contract (short position)
+    
+        """
+        T = days_to_expiry / self.DAYS_IN_YEAR
+        
+        # Forward rate formula: Spot * (1 + r_foreign) / (1 + r_base)
+        forward_rate = spot_rate * (1 + foreign_rate * T) / (1 + domestic_rate * T)
+        
+        # Calculate unrealized P&L (mark-to-market)
+        # For a USD/INR forward, selling USD and buying INR:
+        # P&L = Notional * (forward_rate - spot_rate) / spot_rate
+        pnl = notional * (forward_rate - spot_rate) / spot_rate
+        
+        return {
+            'forward_rate': forward_rate,
+            'contract_pnl': pnl,
+            'days_to_expiry': days_to_expiry
+        }
 
 
