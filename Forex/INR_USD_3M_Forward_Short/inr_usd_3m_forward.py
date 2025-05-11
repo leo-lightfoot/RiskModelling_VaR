@@ -49,14 +49,14 @@ if 'USD_INR' not in data.columns:
 columns_to_clean = []
 if 'USD_INR' in data.columns:
     columns_to_clean.append('USD_INR')
-columns_to_clean.extend(['fed_funds_rate', 'MIBOR '])  # MIBOR has a space
+columns_to_clean.extend(['fed_funds_rate', 'MIBOR'])  
 
 data = clean_numeric_data(data, columns_to_clean)
 
 # Rename columns for clarity
 column_mapping = {
     'fed_funds_rate': 'usd_rate',
-    'MIBOR ': 'inr_rate'  # Note the space after MIBOR
+    'MIBOR': 'inr_rate'  # Note the space after MIBOR
 }
 if 'USD_INR' in data.columns:
     column_mapping['USD_INR'] = 'spot'

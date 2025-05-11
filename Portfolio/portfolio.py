@@ -509,7 +509,7 @@ def create_portfolio_with_custom_allocation(instruments_allocation, initial_capi
 
 def plot_portfolio_performance(portfolio, save_prefix):
     """
-    Create separate plots for cumulative NAV and individual position NAVs.
+    Create plot for cumulative NAV.
     
     Args:
         portfolio: Portfolio object with calculated returns
@@ -520,148 +520,24 @@ def plot_portfolio_performance(portfolio, save_prefix):
         return
     
     # Create figure for cumulative NAV (with log scale)
-    fig1, ax1 = plt.subplots(figsize=(12, 6))
-    ax1.plot(portfolio.nav_history.index, portfolio.nav_history['NAV'], 'b-', linewidth=2, label='Portfolio NAV')
-    ax1.set_title('Portfolio Cumulative NAV (Log Scale)')
-    ax1.set_ylabel('NAV ($)')
-    ax1.set_xlabel('Date')
-    ax1.set_yscale('log')  # Use logarithmic scale for y-axis
-    ax1.grid(True, alpha=0.3)
+    fig, ax = plt.subplots(figsize=(12, 6))
+    ax.plot(portfolio.nav_history.index, portfolio.nav_history['NAV'], 'b-', linewidth=2, label='Portfolio NAV')
+    ax.set_title('Portfolio Cumulative NAV (Log Scale)')
+    ax.set_ylabel('NAV ($)')
+    ax.set_xlabel('Date')
+    ax.set_yscale('log')  # Use logarithmic scale for y-axis
+    ax.grid(True, alpha=0.3)
     
     # Add horizontal grid lines specifically for log scale
-    ax1.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f'${x:,.0f}'))
-    ax1.grid(True, which='both', linestyle='-', alpha=0.2)
-    ax1.legend(loc='best')
+    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f'${x:,.0f}'))
+    ax.grid(True, which='both', linestyle='-', alpha=0.2)
+    ax.legend(loc='best')
     
     plt.tight_layout()
     plt.savefig(f'{save_prefix}_cumulative_nav_log.png', dpi=300)
-    plt.close(fig1)
+    plt.close(fig)
     
-    # Create improved individual asset chart with better y-axis limits
-    fig2, ax2 = plt.subplots(figsize=(15, 8))
-    
-    # Define minimum threshold for values to display (eliminate extreme negatives)
-    min_threshold = 100.0  # $100 minimum value to filter out extreme dips
-    
-    # Get all instrument columns in portfolio NAV history
-    instrument_navs = [col for col in portfolio.nav_history.columns if col.endswith('_NAV') and col != 'Cash_NAV']
-    instrument_names = [col.replace('_NAV', '') for col in instrument_navs]
-    
-    print(f"Found {len(instrument_names)} instruments for plotting: {instrument_names}")
-    
-    # Group instruments by type based on name patterns
-    instrument_groups = {}
-    
-    # Map instruments to groups based on name pattern recognition
-    for name in instrument_names:
-        # Classify based on patterns in names
-        if any(equity_term in name.lower() for equity_term in ['apple', 'lockheed', 'nvidia', 'procter', 'johnson', 'toyota', 'nestle', 'x_steel']):
-            group = 'Equity'
-        elif any(fi_term in name.lower() for fi_term in ['bond', 'tips', 'zcb', 'lqd', 'green', 'yield']):
-            group = 'Fixed_Income'
-        elif any(deriv_term in name.lower() for deriv_term in ['futures', 'call', 'put', 'cds', 'swap', 'barrier']):
-            group = 'Derivatives'
-        elif any(forex_term in name.lower() for forex_term in ['usd', 'gbp', 'eur', 'jpy', 'inr', 'forward']):
-            group = 'Forex'
-        elif name.lower() == 'cash':
-            group = 'Cash'
-        else:
-            group = 'Other'
-            
-        if group not in instrument_groups:
-            instrument_groups[group] = []
-        instrument_groups[group].append(name)
-    
-    print(f"Instrument groups: {instrument_groups}")
-    
-    # Define colors and styles for each group
-    group_styles = {
-        'Equity': {'color': 'blue', 'alpha': 0.8, 'linestyle': '-'},
-        'Fixed_Income': {'color': 'green', 'alpha': 0.8, 'linestyle': '--'},
-        'Derivatives': {'color': 'red', 'alpha': 0.8, 'linestyle': '-.'},
-        'Forex': {'color': 'purple', 'alpha': 0.8, 'linestyle': ':'},
-        'Cash': {'color': 'black', 'alpha': 0.8, 'linestyle': '-'},
-        'Other': {'color': 'gray', 'alpha': 0.8, 'linestyle': '-'}
-    }
-    
-    # Prepare a list to collect the asset data for plotting
-    asset_plots = []
-    
-    # First pass: collect data points
-    for group_name, instruments in instrument_groups.items():
-        for i, name in enumerate(instruments):
-            nav_col = f'{name}_NAV'
-            if nav_col in portfolio.nav_history.columns:
-                # Filter to only show values above the threshold
-                filtered_data = portfolio.nav_history[portfolio.nav_history[nav_col] > min_threshold].copy()
-                if not filtered_data.empty:
-                    style = group_styles[group_name]
-                    # Vary the color slightly within each group
-                    color = style['color']
-                    if len(instruments) > 1:
-                        # Adjust color brightness for differentiation within group
-                        brightness = 0.5 + (i / (len(instruments) * 2))
-                        if color == 'blue':
-                            color = (0, 0, brightness)
-                        elif color == 'green':
-                            color = (0, brightness, 0)
-                        elif color == 'red':
-                            color = (brightness, 0, 0)
-                        elif color == 'purple':
-                            color = (brightness, 0, brightness)
-                    
-                    asset_plots.append({
-                        'name': name,
-                        'group': group_name,
-                        'data': filtered_data[nav_col],
-                        'style': style,
-                        'color': color,
-                        'final_value': filtered_data[nav_col].iloc[-1] if len(filtered_data) > 0 else 0
-                    })
-                else:
-                    print(f"Warning: No values above threshold for {name}")
-    
-    print(f"Found {len(asset_plots)} assets with data above threshold")
-    
-    # Sort assets by final value to plot highest values last (on top) for better visibility
-    asset_plots.sort(key=lambda x: x['final_value'])
-    
-    # Second pass: plot the data
-    for asset in asset_plots:
-        ax2.plot(asset['data'].index, asset['data'], 
-                 linestyle=asset['style']['linestyle'], 
-                 color=asset['color'], 
-                 alpha=asset['style']['alpha'],
-                 label=f"{asset['name']} ({asset['group']})")
-    
-    # Set y-axis parameters
-    ax2.set_yscale('log')
-    ax2.set_ylim(min_threshold, None)  # Set minimum y value to our threshold
-    
-    ax2.set_title('Individual Position NAVs (Log Scale)', fontsize=14)
-    ax2.set_ylabel('NAV ($)', fontsize=12)
-    ax2.set_xlabel('Date', fontsize=12)
-    ax2.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f'${x:,.0f}'))
-    
-    # Improve the grid for better readability
-    ax2.grid(True, which='both', linestyle='-', alpha=0.2)
-    
-    # Only create legend if we have assets to show
-    if asset_plots:
-        # Create a more readable legend with columns
-        leg = ax2.legend(loc='upper center', bbox_to_anchor=(0.5, -0.15), 
-                        ncol=4, fontsize=9, frameon=True, facecolor='white', edgecolor='gray')
-        
-        # Make the plot a bit taller to accommodate the legend below
-        plt.subplots_adjust(bottom=0.25)
-    else:
-        print("Warning: No assets to display in individual NAVs plot")
-    
-    plt.tight_layout()
-    plt.savefig(f'{save_prefix}_individual_navs_log.png', dpi=300, bbox_inches='tight')
-    plt.close(fig2)
-        
-    print(f"Performance charts saved with prefix: {save_prefix}")
+    print(f"Performance chart saved with prefix: {save_prefix}")
 
 def main():
     # Create a diversified portfolio using the instruments from the combined CSV file

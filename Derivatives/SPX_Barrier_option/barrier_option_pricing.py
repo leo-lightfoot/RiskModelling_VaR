@@ -24,7 +24,7 @@ def black_scholes_call(S, K, T, r, sigma, q):
     d2 = d1 - sigma * np.sqrt(T)
     return S * np.exp(-q * T) * norm.cdf(d1) - K * np.exp(-r * T) * norm.cdf(d2)
 
-def monte_carlo_barrier_call(S, K, T, r, sigma, q, B, n_paths=10000, n_steps=30):
+def monte_carlo_barrier_call(S, K, T, r, sigma, q, B, n_paths=10000, n_steps=21):
     dt = T / n_steps
     disc = np.exp(-r * T)
     S_paths = np.full((n_paths, n_steps + 1), S)

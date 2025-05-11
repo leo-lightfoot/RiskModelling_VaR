@@ -10,7 +10,7 @@ plt.style.use('seaborn-v0_8-darkgrid')
 # Monte Carlo Parameters
 NOTIONAL = 100
 DAYS_IN_OPTION = 63  # Approx. 3 months assuming all days are trading days
-MC_PATHS = 2000
+MC_PATHS = 10000
 np.random.seed(42)
 
 # Load the data
