@@ -187,6 +187,50 @@ def print_results(results):
         status = "ACCEPTED" if bounds['lower'] <= count <= bounds['upper'] else "REJECTED"
         print(f"  {method}: {count} ({count/n_returns*100:.2f}%) - {status}")
 
+# Binomial Test Plot
+from scipy.stats import binom
+
+def plot_binomial_test(results, alpha=0.01):
+    actual = results['violations']['GARCH+EVT']
+    total_days = len(results['actual_returns'])
+    expected = int(alpha * total_days)
+
+    std_dev = np.sqrt(total_days * alpha * (1 - alpha))
+    x = np.arange(int(expected - 4*std_dev), int(expected + 4*std_dev))
+    pmf = binom.pmf(x, total_days, alpha)
+
+    plt.figure(figsize=(12, 6))
+    plt.plot(x, pmf, 'b-', lw=2, label='Expected Binomial Distribution')
+    plt.axvline(expected, color='green', linestyle='--', label=f'Expected: {expected}')
+    plt.axvline(actual, color='red', label=f'Actual: {actual}')
+    plt.title(f'Binomial Test of 99% 1-Day VaR Violations (Scaled to $10M)\n(Total Days: {total_days})')
+    plt.xlabel('Number of Exceptions')
+    plt.ylabel('Probability Mass')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig("binomial_test_evt.png", dpi=300)
+    plt.show()
+
+def plot_evt_pnl_distribution(actual_returns, var_series, alpha=0.01, scale=1e7):
+    scaled_returns = actual_returns * scale
+    scaled_var = np.percentile(scaled_returns,1)
+
+    plt.figure(figsize=(12, 6))
+    plt.hist(scaled_returns, bins=60, color='skyblue', edgecolor='black')
+    plt.axvline(scaled_var, color='red', linestyle='--', linewidth=2,
+                label=f'Avg GARCH+EVT VaR @ 99% ($10M): USD {int(abs(scaled_var)):,}')
+    plt.title('GARCH+EVT: Portfolio PnL Distribution (Scaled to $10M)')
+    plt.xlabel('Profit and Loss (USD, $10M)')
+    plt.ylabel('Frequency')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig("evt_pnl_distribution.png", dpi=300)
+    plt.show() 
+
+
+
 if __name__ == "__main__":
     args = parse_arguments()
     
@@ -213,3 +257,7 @@ if __name__ == "__main__":
         # Print and plot results
         print_results(results)
         plot_results(results) 
+
+        plot_binomial_test(results, alpha)
+        plot_evt_pnl_distribution(results['actual_returns'], results['var_estimates']['GARCH+EVT'], alpha)
+       
