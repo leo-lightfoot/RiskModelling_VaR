@@ -1,5 +1,3 @@
-#%pip install numpy pandas matplotlib scikit-learn
-
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -9,22 +7,28 @@ import requests
 from io import StringIO
 from datetime import datetime, timedelta
 
+DATA_URL = "https://raw.githubusercontent.com/leo-lightfoot/RiskModelling_VaR/main/data_restructured.csv"
+PORTFOLIO_RETURNS_URL = "https://raw.githubusercontent.com/leo-lightfoot/RiskModelling_VaR/main/portfolio_results/portfolio_returns_history.csv"
+PORTFOLIO_NAV_URL = "https://raw.githubusercontent.com/leo-lightfoot/RiskModelling_VaR/main/portfolio_results/portfolio_nav_history.csv"
+
+def load_data(url):
+    response = requests.get(url)
+    if response.status_code == 200:
+        return pd.read_csv(StringIO(response.text))
+    else:
+        print(f"Failed to download data: HTTP {response.status_code}")
+        return None
+
 # -----------------------------------------
-#       PRICING FUNCTIONS FOR MC VaR
+#  SIMPLIFIED PRICING FUNCTIONS FOR MC VaR
 # -----------------------------------------
 
 class SimplifiedPricing:
-    """
-    Provides simplified pricing functions for Monte Carlo VaR simulation.
-    """
+    """ Provides simplified pricing functions for Monte Carlo VaR simulation. """
     
     def __init__(self):
         # Constants used by multiple pricing functions
         self.DAYS_IN_YEAR = 365
-    
-    #----------------------------------
-    # Fixed Income Pricing Functions
-    #----------------------------------
     
     def calculate_bond_price(self, yield_rate, coupon_rate, years_to_maturity, frequency=2, notional=100):
         """Calculate bond price using the yield to maturity"""
@@ -48,10 +52,7 @@ class SimplifiedPricing:
         return coupon_pv + face_value_pv
     
     def price_10y_treasury_bond(self, yield_rate, days_to_maturity=None):
-        """
-        Price a 10-year Treasury bond
-        
-        """
+        """ Price a 10-year Treasury bond """
         NOTIONAL = 100
         COUPON_RATE = 0.02  # 2% annual
         FREQUENCY = 2  # Semiannual payments
@@ -70,10 +71,7 @@ class SimplifiedPricing:
         )
     
     def price_tips(self, real_yield, inflation_factor, days_to_maturity=None):
-        """
-        Price a Treasury Inflation-Protected Security (TIPS)
-        
-        """
+        """ Price a Treasury Inflation-Protected Security (TIPS) """
         NOTIONAL = 100
         COUPON_RATE = 0.0125  # 1.25% annual
         FREQUENCY = 2  # Semiannual payments
@@ -107,10 +105,7 @@ class SimplifiedPricing:
         return coupon_pv + principal_pv
     
     def price_corporate_bond(self, treasury_yield, credit_spread, days_to_maturity=None, coupon_rate=0.04, maturity_years=5):
-        """
-        Price a corporate bond based on Treasury yield plus credit spread
-        
-        """
+        """ Price a corporate bond based on Treasury yield plus credit spread """
         NOTIONAL = 100
         FREQUENCY = 2  # Semiannual payments
         
@@ -131,10 +126,7 @@ class SimplifiedPricing:
         )
     
     def price_green_bond(self, treasury_yield, days_to_maturity=None, coupon_rate=0.025, greenium=-0.002, maturity_years=5, frequency=1):
-        """
-        Price a green bond, accounting for greenium (green premium)
-        
-        """
+        """ Price a green bond, accounting for greenium (green premium)  """
         NOTIONAL = 100
         
         # Calculate effective yield (Treasury + greenium)
@@ -154,10 +146,7 @@ class SimplifiedPricing:
         )
     
     def price_revenue_bond(self, treasury_yield, days_to_maturity=None, coupon_rate=0.04, spread=0.0075, maturity_years=30, frequency=2):
-        """
-        Price a revenue bond with spread over treasury
-        
-        """
+        """ Price a revenue bond with spread over treasury  """
         NOTIONAL = 100
         
         # Calculate effective yield (Treasury + spread)
@@ -177,10 +166,7 @@ class SimplifiedPricing:
         )
     
     def price_zero_coupon_bond(self, yield_rate, days_to_maturity=None, maturity_years=1):
-        """
-        Price a zero-coupon bond
-        
-        """
+        """  Price a zero-coupon bond   """
         NOTIONAL = 100
         
         if days_to_maturity is None:
@@ -188,17 +174,12 @@ class SimplifiedPricing:
         else:
             years_to_maturity = days_to_maturity / 365.0
         
-        # For zero-coupon bond, P = F / (1 + y)^t for discrete compounding
-        # or P = F * exp(-y * t) for continuous compounding
         # Using continuous compounding for simplicity
         return NOTIONAL * np.exp(-yield_rate * years_to_maturity)
     
     def price_high_yield_corp_debt(self, treasury_yield, credit_spread, days_to_maturity=None, 
                                   coupon_rate=0.065, maturity_years=5, frequency=2):
-        """
-        Price high yield corporate debt instrument
-        
-        """
+        """  Price high yield corporate debt instrument  """
         NOTIONAL = 100
         
         # Calculate the high yield rate (treasury + high yield spread)
@@ -216,16 +197,9 @@ class SimplifiedPricing:
             frequency=frequency,
             notional=NOTIONAL
         )
-    
-    #----------------------------------
-    # Derivatives Pricing Functions
-    #----------------------------------
-    
-    def price_equity_futures(self, spot_price, risk_free_rate, dividend_yield, days_to_expiry):
-        """
-        Price an equity futures contract
         
-        """
+    def price_equity_futures(self, spot_price, risk_free_rate, dividend_yield, days_to_expiry):
+        """ Price an equity futures contract """
         time_to_maturity = days_to_expiry / self.DAYS_IN_YEAR
         
         # F = S * e^((r-q)*T)
@@ -234,27 +208,7 @@ class SimplifiedPricing:
         return futures_price
     
     def price_vix_futures(self, vix_index_level, vix_history=None, days_to_expiry=21, mean_reversion_speed=0.2, vol_of_vol=None):
-        """
-        Price VIX futures using a mean-reverting model
-        
-        Parameters:
-        -----------
-        vix_index_level : float
-            Current VIX index level
-        vix_history : pandas.Series
-            Historical VIX values to calculate 30-day moving average (expected column name: 'vix_index_level')
-        days_to_expiry : int
-            Days until the futures contract expires (default 21 trading days ≈ 1 month)
-        mean_reversion_speed : float
-            Speed of mean reversion (theta)
-        vol_of_vol : float
-            Volatility parameter for the model. If None, calculated from vix_history
-            
-        Returns:
-        --------
-        float
-            Estimated VIX futures price (column name in output dataframe: 'vix_futures_1m')
-        """
+        """ Price VIX futures using a mean-reverting model  """
         time_to_maturity = days_to_expiry / self.DAYS_IN_YEAR
         
         # Calculate the 30-day moving average if history is provided
@@ -281,10 +235,7 @@ class SimplifiedPricing:
         return vix_futures_1m
     
     def price_commodity_futures(self, spot_price, risk_free_rate, storage_cost, convenience_yield, days_to_expiry):
-        """
-        Price a commodity futures contract
-        
-        """
+        """ Price a commodity futures contract """
         time_to_maturity = days_to_expiry / self.DAYS_IN_YEAR
         
         # F = S * e^((r + u - y)*T) where u = storage cost, y = convenience yield
@@ -293,10 +244,7 @@ class SimplifiedPricing:
         return futures_price
     
     def price_gold_futures(self, spot_price, risk_free_rate, storage_cost=0.005, days_to_expiry=90):
-        """
-        Price gold futures contract
-        
-        """
+        """ Price gold futures contract """
         # Gold typically has minimal convenience yield, so we set it to 0
         return self.price_commodity_futures(
             spot_price=spot_price,
@@ -308,10 +256,7 @@ class SimplifiedPricing:
     
     def price_crude_oil_futures(self, spot_price, risk_free_rate, days_to_expiry=30,
                               storage_cost=0.02/12, convenience_yield=0.01/12):
-        """
-        Price crude oil futures contract
-        
-        """
+        """ Price crude oil futures contract """
         return self.price_commodity_futures(
             spot_price=spot_price,
             risk_free_rate=risk_free_rate,
@@ -322,19 +267,13 @@ class SimplifiedPricing:
     
     def price_soybean_futures(self, spot_price, risk_free_rate, days_to_expiry, 
                             month=None, base_storage_cost=0.04, seasonal_amplitude=0.02):
-        """
-        Price soybean futures with seasonal storage costs
-        
-        """
-        # If month not provided, get current month
+        """ Price soybean futures with seasonal storage costs """
         if month is None:
             month = datetime.now().month
         
-        # Calculate seasonal storage cost with peak in October (month 10)
         phase_shift = 10
         seasonal_storage_cost = base_storage_cost + seasonal_amplitude * np.cos(2 * np.pi * (month - phase_shift) / 12)
         
-        # Constant convenience yield (could also be made seasonal if desired)
         convenience_yield = 0.02
         
         return self.price_commodity_futures(
@@ -346,10 +285,7 @@ class SimplifiedPricing:
         )
     
     def black_scholes_call(self, spot, strike, days_to_expiry, risk_free_rate, volatility, dividend_yield=0):
-        """
-        Price a European call option using Black-Scholes-Merton model
-        
-        """
+        """Price a European call option using Black-Scholes-Merton model  """
         T = days_to_expiry / self.DAYS_IN_YEAR
         
         if T <= 0 or volatility <= 0 or spot <= 0:
@@ -363,10 +299,7 @@ class SimplifiedPricing:
         return call_price
     
     def black_scholes_put(self, spot, strike, days_to_expiry, risk_free_rate, volatility, dividend_yield=0):
-        """
-        Price a European put option using Black-Scholes-Merton model
-        
-        """
+        """ Price a European put option using Black-Scholes-Merton model  """
         T = days_to_expiry / self.DAYS_IN_YEAR
         
         if T <= 0 or volatility <= 0 or spot <= 0:
@@ -380,10 +313,7 @@ class SimplifiedPricing:
         return put_price
     
     def garman_kohlhagen_call(self, spot, strike, days_to_expiry, domestic_rate, foreign_rate, volatility):
-        """
-        Price a European FX call option using Garman-Kohlhagen model
-        
-        """
+        """ Price a European FX call option using Garman-Kohlhagen model  """
         T = days_to_expiry / self.DAYS_IN_YEAR
         
         if T <= 0 or volatility <= 0 or spot <= 0:
@@ -394,13 +324,10 @@ class SimplifiedPricing:
         
         call_price = spot * np.exp(-foreign_rate * T) * norm.cdf(d1) - strike * np.exp(-domestic_rate * T) * norm.cdf(d2)
         
-        return max(0.0001, call_price)  # Ensure no zero values for log returns
+        return max(0.0001, call_price)
     
     def garman_kohlhagen_put(self, spot, strike, days_to_expiry, domestic_rate, foreign_rate, volatility):
-        """
-        Price a European FX put option using Garman-Kohlhagen model
-        
-        """
+        """Price a European FX put option using Garman-Kohlhagen model  """
         T = days_to_expiry / self.DAYS_IN_YEAR
         
         if T <= 0 or volatility <= 0 or spot <= 0:
@@ -412,23 +339,15 @@ class SimplifiedPricing:
         put_price = strike * np.exp(-domestic_rate * T) * norm.cdf(-d2) - spot * np.exp(-foreign_rate * T) * norm.cdf(-d1)
         
         return put_price
-    
-    #----------------------------------
-    # Forex Forward Pricing
-    #----------------------------------
-    
+     
     def price_fx_forward(self, spot_rate, domestic_rate, foreign_rate, days_to_expiry, notional=100.0):
-        """
-        Price an FX forward contract
-        
-        """
+        """ Price an FX forward contract """
         T = days_to_expiry / self.DAYS_IN_YEAR
         
         # Forward rate formula: Spot * (1 + r_foreign) / (1 + r_base)
         forward_rate = spot_rate * (1 + domestic_rate * T) / (1 + foreign_rate * T)
         
         # Calculate unrealized P&L (mark-to-market)
-        # For a GBP/USD forward, buying GBP and selling USD:
         # P&L = Notional * (1/spot - 1/forward_rate)
         pnl = notional * (1/spot_rate - 1/forward_rate)
         
@@ -437,18 +356,11 @@ class SimplifiedPricing:
             'contract_pnl': pnl,
             'days_to_expiry': days_to_expiry
         }
-
-    #----------------------------------
-    # Credit Default Swap Pricing
-    #----------------------------------
-    
+       
     def price_cds(self, credit_spread, risk_free_rate, current_date=None, previous_date=None, 
                 maturity_years=5, recovery_rate=0.4, payments_per_year=4, roll_frequency_days=365, 
                 notional=100, transaction_cost=0.002, previous_value=None):
-        """
-        Price a Credit Default Swap (CDS) with rolling strategy logic
-        
-        """
+        """ Price a Credit Default Swap (CDS) with rolling strategy logic  """
         from datetime import timedelta
         
         result = {}
@@ -513,16 +425,9 @@ class SimplifiedPricing:
             
         return result
     
-    #----------------------------------
-    # Variance Swap Pricing
-    #----------------------------------
-    
     def price_variance_swap(self, call_ivol, put_ivol, current_date=None, previous_date=None, maturity_days=30, 
                           notional=100, annual_basis=365.0, transaction_cost=0.002):
-        """
-        Price a variance swap with rollover logic
-        
-        """
+        """ Price a variance swap with rollover logic  """
         from datetime import timedelta
         
         result = {}
@@ -550,8 +455,7 @@ class SimplifiedPricing:
         
         if current_date is not None:
             if previous_date is not None:
-                # If we have a previous date, check if this is a roll date
-                # based on the original contract expiry
+
                 current_expiry = previous_date + timedelta(days=maturity_days)
                 if current_date >= current_expiry:
                     result['roll_date'] = True
@@ -583,17 +487,11 @@ class SimplifiedPricing:
             
         return result
     
-    #----------------------------------
-    # Asian Option Pricing
-    #----------------------------------
     
     def price_asian_option(self, spot, strike=None, risk_free_rate=0, dividend_yield=0, volatility=0, 
                           current_date=None, previous_date=None, option_type='put',
                           days_in_option=63, paths=2000, notional=100, seed=42):
-        """
-        Price an Asian option with rollover logic using Monte Carlo simulation
-        
-        """
+        """ Price an Asian option with rollover logic using Monte Carlo simulation  """
         from datetime import timedelta
         import numpy as np
         
@@ -602,7 +500,6 @@ class SimplifiedPricing:
         if current_date is None:
             current_date = datetime.today()
 
-        # Check for valid inputs
         if np.isnan(spot) or np.isnan(volatility) or np.isnan(risk_free_rate) or np.isnan(dividend_yield):
             result['option_price'] = np.nan
             result['days_to_maturity'] = 0
@@ -612,86 +509,64 @@ class SimplifiedPricing:
             result['nav'] = notional
             return result
             
-        # If strike not provided, use ATM
         if strike is None:
             strike = spot
             
         result['strike'] = strike
         
-        # Roll date logic
         result['roll_date'] = False
         days_to_maturity = days_in_option
         
         if current_date is not None:
             if previous_date is not None:
-                # Determine if we need to roll based on original contract expiry
-                # In the original code, a roll happens at the start of a new period
-                # which starts the day after the previous option expires
-                
-                # Calculate when the previous option would end (if any)
                 if hasattr(previous_date, 'current_end'):
                     previous_end = previous_date.current_end
                 else:
                     previous_end = previous_date + timedelta(days=days_in_option - 1)
                     
-                # If current date is after or on the expiry, it's a roll date
                 if current_date > previous_end:
                     result['roll_date'] = True
-                    # Set new expiry
                     current_end = current_date + timedelta(days=days_in_option - 1)
                 else:
-                    # Continue with existing contract
                     current_end = previous_end
                 
-                # Calculate days remaining
-                days_to_maturity = (current_end - current_date).days + 1  # +1 because we include current day
+                days_to_maturity = (current_end - current_date).days + 1
             else:
-                # First date, start new contract
                 result['roll_date'] = True
                 days_to_maturity = days_in_option
                 
         result['days_to_maturity'] = days_to_maturity
         
-        # Set seed for reproducibility
         if seed is not None:
             np.random.seed(seed)
         
-        # Calculate time parameters
-        T = days_to_maturity / 252.0  # Assuming 252 trading days per year
+        T = days_to_maturity / 252.0
         
-        # Use remaining days as steps, capped at original days_in_option
         steps = min(days_to_maturity, days_in_option)
         
         if steps <= 0 or T <= 0:
-            # Option at or past expiry
             if option_type.lower() == 'put':
                 result['option_price'] = max(strike - spot, 0)
             else:
                 result['option_price'] = max(spot - strike, 0)
         else:
-            # Price using Monte Carlo
             dt = T / steps
             drift = (risk_free_rate - dividend_yield - 0.5 * volatility ** 2) * dt
             diffusion = volatility * np.sqrt(dt)
             
-            # Simulate price paths
             Z = np.random.randn(paths, steps)
             price_paths = spot * np.exp(np.cumsum(drift + diffusion * Z, axis=1))
             
-            # Calculate arithmetic average price for each path
             average_price = np.mean(price_paths, axis=1)
             
-            # Calculate payoff
             if option_type.lower() == 'put':
                 payoff = np.maximum(strike - average_price, 0)
             else:
                 payoff = np.maximum(average_price - strike, 0)
             
-            # Calculate option price as discounted expected payoff
             option_price = np.exp(-risk_free_rate * T) * np.mean(payoff)
             result['option_price'] = option_price
         
-        # Calculate returns
         if previous_date is not None and 'previous_price' in previous_date and not np.isnan(previous_date.previous_price):
             previous_price = previous_date.previous_price
             
@@ -700,41 +575,30 @@ class SimplifiedPricing:
                 result['daily_return'] = daily_return
                 result['log_return'] = np.log(result['option_price'] / previous_price)
                 
-                # Update NAV
                 result['nav'] = notional * (1 + daily_return)
             else:
                 result['daily_return'] = 0
                 result['log_return'] = 0
                 result['nav'] = notional
         else:
-            # For the first date, no return calculation
             result['daily_return'] = 0
             result['log_return'] = 0
             result['nav'] = notional
             
-        # Store current date and price for next valuation
         current_end = current_date + timedelta(days=days_in_option - 1)
         previous_price = result['option_price']
             
         return result
     
-    #----------------------------------
-    # Barrier Option Pricing
-    #----------------------------------
-    
     def price_barrier_option(self, spot, strike=None, risk_free_rate=0, dividend_yield=0, volatility=0, 
                            current_date=None, previous_date=None, barrier_multiplier=1.1,
                            maturity_days=30, option_type='call', barrier_type='knockout',
                            notional=100, transaction_cost=0.003, annual_basis=365.0):
-        """
-        Price a barrier option with rollover logic
-        
-        """
+        """ Price a barrier option with rollover logic  """
         from datetime import timedelta
         
         result = {}
         
-        # Check for valid inputs
         if np.isnan(spot) or np.isnan(volatility) or np.isnan(risk_free_rate) or np.isnan(dividend_yield):
             result['option_price'] = np.nan
             result['strike_price'] = np.nan
@@ -747,37 +611,31 @@ class SimplifiedPricing:
             result['nav'] = notional
             return result
             
-        # If strike not provided, use ATM
         if strike is None:
             strike = spot
             
         result['strike_price'] = strike
         
-        # Calculate barrier level
         barrier_level = barrier_multiplier * strike
         result['barrier_level'] = barrier_level
         
-        # Check for knock-out or knock-in conditions
         result['knocked_out'] = False
         if barrier_type.lower() == 'knockout':
             if (option_type.lower() == 'call' and spot >= barrier_level) or \
                (option_type.lower() == 'put' and spot <= barrier_level):
                 result['knocked_out'] = True
         
-        # Roll date logic
         result['roll_date'] = False
         if current_date is not None and previous_date is not None:
             days_since_previous = (current_date - previous_date).days
             if days_since_previous >= maturity_days:
                 result['roll_date'] = True
         
-        # Calculate time to expiry
         days_to_expiry = maturity_days
         if current_date is not None and previous_date is not None:
             days_to_expiry = max(0, maturity_days - (current_date - previous_date).days)
         result['days_to_expiry'] = days_to_expiry
         
-        # Calculate option price
         if result['knocked_out']:
             result['option_price'] = 0.0
         else:
@@ -791,7 +649,7 @@ class SimplifiedPricing:
                     volatility=volatility,
                     dividend_yield=dividend_yield
                 )
-            else:  # put
+            else:
                 result['option_price'] = self.black_scholes_put(
                     spot=spot,
                     strike=strike,
@@ -801,13 +659,10 @@ class SimplifiedPricing:
                     dividend_yield=dividend_yield
                 )
         
-        # Calculate returns
         if previous_date is not None:
             if result['roll_date']:
-                # On roll date, adjust for transaction cost
                 result['daily_return'] = -transaction_cost
             else:
-                # Normal daily return
                 result['daily_return'] = (result['option_price'] - result.get('previous_price', result['option_price'])) / result.get('previous_price', result['option_price'])
             
             result['log_return'] = np.log(1 + result['daily_return'])
@@ -815,10 +670,8 @@ class SimplifiedPricing:
             result['daily_return'] = 0.0
             result['log_return'] = 0.0
         
-        # Store current price for next calculation
         result['previous_price'] = result['option_price']
         
-        # Calculate NAV
         if previous_date is None:
             result['nav'] = notional
         else:
@@ -833,12 +686,8 @@ class SimplifiedPricing:
         """
         T = days_to_expiry / self.DAYS_IN_YEAR
         
-        # Forward rate formula: Spot * (1 + r_foreign) / (1 + r_base)
         forward_rate = spot_rate * (1 + foreign_rate * T) / (1 + domestic_rate * T)
         
-        # Calculate unrealized P&L (mark-to-market)
-        # For a USD/INR forward, selling USD and buying INR:
-        # P&L = Notional * (forward_rate - spot_rate) / spot_rate
         pnl = notional * (forward_rate - spot_rate) / spot_rate
         
         return {
@@ -846,10 +695,6 @@ class SimplifiedPricing:
             'contract_pnl': pnl,
             'days_to_expiry': days_to_expiry
         }
-    
-# ---------------------------------------
-#   FUNCTIONS FOR MONTE CARLO VAR
-# ---------------------------------------
 
 # Transforming Data
 def empirical_cdf_transform(X):
@@ -902,18 +747,16 @@ def regularize_corr_matrix(corr_matrix, lambda_=1e-3):
 
 # Copula likelihood and AIC
 def copula_log_likelihood(copula_type, u_data, corr_matrix, df_copula=None):
-    norm_data = norm.ppf(u_data)  # convert uniform marginals to normal scores
+    norm_data = norm.ppf(u_data)
     d = norm_data.shape[1]
     
     if copula_type == "gaussian":
-        # Multivariate normal log-likelihood
         ll = multivariate_normal(mean=np.zeros(d), cov=corr_matrix).logpdf(norm_data).sum()
-        k = d * (d - 1) / 2  # number of free correlation parameters (symmetric matrix without diagonal)
+        k = d * (d - 1) / 2
     
     elif copula_type == "t":
-        # Convert to multivariate t logpdf (using scipy >= 1.6)
         ll = multivariate_t(loc=np.zeros(d), shape=corr_matrix, df=df_copula).logpdf(norm_data).sum()
-        k = d * (d - 1) / 2 + 1  # correlation parameters + df parameter
+        k = d * (d - 1) / 2 + 1
     
     else:
         raise ValueError("Invalid copula type")
@@ -926,10 +769,8 @@ def simulate_gaussian_copula(u_data, n_sim, ridge=1e-6):
     norm_data = norm.ppf(u_data)
     emp_cov = np.cov(norm_data.T)
 
-    # Regularize covariance matrix
     emp_cov += ridge * np.eye(emp_cov.shape[0])
 
-    # Simulate from multivariate normal
     z = np.random.multivariate_normal(mean=np.zeros(emp_cov.shape[0]), cov=emp_cov, size=n_sim)
     u_sim = norm.cdf(z)
     return u_sim
@@ -963,26 +804,20 @@ def returns_to_levels(sim_returns_df, current_levels,
                       log_return_factors=None, diff_factors=None, 
                       clip_bounds=(1e-4, 1e4), verbose=False):
     
-    # Convert simulated returns back to factor levels.
-    
     levels = pd.DataFrame(index=sim_returns_df.index, columns=sim_returns_df.columns)
     log_return_factors = log_return_factors or []
     diff_factors = diff_factors or []
 
     for col in sim_returns_df.columns:
         if col in log_return_factors:
-            # Multiplicative change: exp(log return) * previous level
             levels[col] = np.exp(sim_returns_df[col]) * current_levels[col]
         elif col in diff_factors:
-            # Additive change: diff + previous level
             levels[col] = sim_returns_df[col] + current_levels[col]
         else:
             if verbose:
                 print(f"⚠️ Warning: Column '{col}' not classified as log or diff.")
-            # Default to additive as safer fallback
             levels[col] = sim_returns_df[col] + current_levels.get(col, 0)
 
-    # Clip extreme simulated values
     levels = levels.clip(lower=clip_bounds[0], upper=clip_bounds[1])
 
     return levels
@@ -1033,14 +868,11 @@ def price_portfolio(factor_dict):
     dax_call_ivol_30d = factor_dict['DAX_Call_ivol_30D']
     dax_put_ivol_30d = factor_dict['DAX_Put_ivol_30D']
     five_yr_ford_credit_spread = factor_dict['5_Y_ford_credit_spread']
-    #f_us_eq_price = factor_dict['F_US_Equity_Price']
     nikkei_spot = factor_dict['Nikkei_spot']
     nky_30d_ivol = factor_dict['NKY_30D_ivol']
     nky_div_yield = factor_dict['NKY_Div_yield']
     spx_div_yield = factor_dict['SPX_Div_yield']
     
-    
-
     pricing_model = SimplifiedPricing()
 
     equity_value = 10000000 * 0.02 * (apple_stock/df1['eq_apple_price'].iloc[0] +
@@ -1094,28 +926,40 @@ def revalue(sim_levels_df):
 # ------------------------------------------------------
 #      MONTE CARLO SIM VAR COMPUTATION - FULL WINDOW
 # ------------------------------------------------------ 
-
 # Load Data
 try:
-    # Use relative paths for better portability
-    df = pd.read_csv("data_restructured.csv", parse_dates=["date"], index_col="date")
-    df1 = df.copy()
-    factors = df.columns.tolist()
-    df = df.apply(pd.to_numeric, errors='coerce')  # Convert non-numeric to NaN
-    df = df.dropna()  # Drop rows with NaN (from non-numeric values)
+    df_response = load_data(DATA_URL)
+    if df_response is not None:
+        df = df_response.copy()
+        # Print the first few dates to debug
+        print("First few date values:", df['date'].head(10).tolist())
+        # Use format='mixed' to handle mixed date formats, with errors='coerce' to handle parsing errors
+        df['date'] = pd.to_datetime(df['date'], format='mixed', dayfirst=True, errors='coerce')
+        # Drop rows with invalid dates
+        df = df.dropna(subset=['date'])
+        df = df.set_index('date')
+        df1 = df.copy()
+        factors = df.columns.tolist()
+        df = df.apply(pd.to_numeric, errors='coerce')
+        df = df.dropna()
+    else:
+        raise ValueError("Failed to load data from GitHub")
     
-    # Verify data is available before proceeding
     if len(df) == 0:
         raise ValueError("No data available in dataframe. Please check data file.")
     
-    # Portfolio Returns
-    df_portfolio_returns = pd.read_csv("portfolio_results/portfolio_returns_history.csv")
-    df_portfolio_returns['Date'] = pd.to_datetime(df_portfolio_returns['Date'])
-    df_portfolio_returns_250d = df_portfolio_returns.iloc[-250:]
-except FileNotFoundError as e:
-    print(f"Error: Could not find data file. {e}")
-    print("Please ensure data files are in the correct location.")
-    raise
+    df_portfolio_returns_response = load_data(PORTFOLIO_RETURNS_URL)
+    if df_portfolio_returns_response is not None:
+        df_portfolio_returns = df_portfolio_returns_response.copy()
+        # Print the first few dates to debug
+        print("First few portfolio return dates:", df_portfolio_returns['Date'].head(10).tolist())
+        # Use format='mixed' for portfolio returns as well
+        df_portfolio_returns['Date'] = pd.to_datetime(df_portfolio_returns['Date'], format='mixed', dayfirst=True, errors='coerce')
+        # Drop rows with invalid dates
+        df_portfolio_returns = df_portfolio_returns.dropna(subset=['Date'])
+        df_portfolio_returns_250d = df_portfolio_returns.iloc[-250:]
+    else:
+        raise ValueError("Failed to load portfolio returns data from GitHub")
 except Exception as e:
     print(f"Error loading or processing data: {e}")
     raise
@@ -1143,26 +987,19 @@ diff_factors = [
     'NKY_30D_ivol', 'NKY_Div_yield', 'SPX_Div_yield'
 ]
 
-# Convert percentage yields/spreads to decimal if needed
 df[diff_factors] = df[diff_factors] / 100.0
 
-# Compute returns
 returns_log = np.log(df[log_return_factors] / df[log_return_factors].shift(1))
 returns_diff = df[diff_factors].diff()
 
-# Combine and drop any NaNs
 returns = pd.concat([returns_log, returns_diff], axis=1).dropna()
 
-# Drop rows with any non-finite values in the returns data
 returns_clean = returns.replace([np.inf, -np.inf], np.nan).dropna()
 
-# Confirm all data is finite
 assert np.isfinite(returns_clean.values).all(), "Still contains non-finite values"
 
-# Fit Marginals
 u_data, marginals = fit_marginals(returns_clean)
 
-# Verify that all factors in log_return_factors and diff_factors are present in returns_clean
 missing_log_factors = [f for f in log_return_factors if f not in returns_clean.columns]
 missing_diff_factors = [f for f in diff_factors if f not in returns_clean.columns]
 
@@ -1173,20 +1010,16 @@ if missing_log_factors or missing_diff_factors:
     if missing_diff_factors:
         print(f"  Missing diff factors: {missing_diff_factors}")
 
-# Ensure float type and valid [0, 1] range
 u_data = u_data.astype(float)
 u_data = u_data.clip(1e-6, 1 - 1e-6)
 assert np.all((u_data >= 0) & (u_data <= 1)), "u_data must contain values in [0,1]"
 
-# Pseudo-observations
 norm_data = norm.ppf(u_data)
 cov_matrix = np.cov(norm_data.T)
 
-# Convert to correlation matrix
 std_devs = np.sqrt(np.diag(cov_matrix))
 corr_matrix = cov_matrix / np.outer(std_devs, std_devs)
 
-# Ensure diagonals are exactly 1
 np.fill_diagonal(corr_matrix, 1.0)
 
 ll_g, aic_g = copula_log_likelihood("gaussian", u_data, corr_matrix)
@@ -1195,18 +1028,14 @@ ll_t, aic_t = copula_log_likelihood("t", u_data, corr_matrix, df_copula=4)
 print(f"Gaussian Copula: Log-likelihood = {ll_g:.2f}, AIC = {aic_g:.2f}")
 print(f"Student's t Copula: Log-likelihood = {ll_t:.2f}, AIC = {aic_t:.2f}")
 
-# Choose better copula
 chosen_copula = "t" if aic_t < aic_g else "gaussian"
 print(f"\n✅ Selected Copula: {chosen_copula.upper()}")
 
-# Reconvert returns to levels
 current_levels = df.iloc[-1].to_dict()
 
-# Simulation and VaR calculation
 confidence_level = 0.99
 n_simulations = 10000
 
-# Set random seed for reproducibility of simulations
 np.random.seed(42)
 
 if chosen_copula == 't':
@@ -1223,27 +1052,26 @@ elif chosen_copula == 'gaussian':
         print(f"Error in Gaussian copula simulation: {e}")
         print("Reducing ridge parameter and retrying...")
         u_sim = simulate_gaussian_copula(u_data, n_simulations, ridge=1e-4)
+
 sim_returns = u_to_returns(u_sim, marginals)
-# Clip simulated additive returns (diff_factors) to realistic changes
+
 for col in diff_factors:
     if col in sim_returns.columns:
-        sim_returns[col] = sim_returns[col].clip(lower=-0.01, upper=0.01)  # e.g., ±1% change per day
-sim_levels = returns_to_levels(sim_returns, current_levels, log_return_factors=log_return_factors,
-    diff_factors=diff_factors,
-    clip_bounds=(1e-4, 1e4),  # adjust if needed
-    verbose=False)
+        sim_returns[col] = sim_returns[col].clip(lower=-0.01, upper=0.01)
+
+sim_levels = returns_to_levels(sim_returns, current_levels, 
+                             log_return_factors=log_return_factors,
+                             diff_factors=diff_factors,
+                             clip_bounds=(1e-4, 1e4),
+                             verbose=False)
+
 values = revalue(sim_levels)
 V0 = price_portfolio(current_levels)
 pnl = (values - V0) / V0
-# Remove non-finite PnL values
+
 pnl = pnl[np.isfinite(pnl)]
 VaR = -np.percentile(pnl, (1 - confidence_level) * 100)
 
-# ------------------------------
-#           PnL PLOT
-# ------------------------------
-
-# Plot PnL
 plt.hist(pnl, bins=50, color="steelblue", alpha=0.7)
 plt.axvline(-VaR, color="red", linestyle="--", label=f"VaR @ {int(confidence_level*100)}% = {VaR:.4%}")
 plt.title(f"Portfolio PnL Distribution ({chosen_copula.capitalize()} Copula, {n_simulations} Sims)")
@@ -1253,25 +1081,16 @@ plt.legend()
 plt.grid(True)
 plt.show()
 
-# Final result
 print(f"\n✅ Final VaR @ {int(confidence_level*100)}% = {VaR:.4%} using {n_simulations} simulations.")
 print(f"\n✅ Final VaR @ {int(confidence_level*100)}% = ${VaR * 10000000} using {n_simulations} simulations.")
 
-# -------------------------------
-#           BOOTSTRAPPING
-# -------------------------------
-
-# Set parameters
 bootstrap_iterations = 1000
 ci_percentile = 95
 
-# Set random seed for reproducible bootstrapping
 np.random.seed(42)
 
-# Store bootstrap VaRs
 bootstrap_vars = []
 
-# Bootstrap loop
 for _ in range(bootstrap_iterations):
     resample = np.random.choice(pnl, size=len(pnl), replace=True)
     var_boot = -np.percentile(resample, (1 - confidence_level) * 100)
@@ -1279,12 +1098,10 @@ for _ in range(bootstrap_iterations):
 
 bootstrap_vars = np.array(bootstrap_vars)
 
-# Compute confidence interval
 lower_bound = np.percentile(bootstrap_vars, (100 - ci_percentile) / 2)
 upper_bound = np.percentile(bootstrap_vars, 100 - (100 - ci_percentile) / 2)
 mean_var = np.mean(bootstrap_vars)
 
-# Plot
 plt.figure(figsize=(10, 6))
 plt.hist(bootstrap_vars, bins=50, color="lightsteelblue", edgecolor="black", alpha=0.8)
 plt.axvline(lower_bound, color="red", linestyle="--", label=f"Lower {ci_percentile}% CI = {lower_bound:.5f}")
@@ -1297,23 +1114,16 @@ plt.legend()
 plt.grid(True)
 plt.show()
 
-# Optional: print results
 print(f"\n✅ Bootstrap {ci_percentile}% CI for 99% VaR:")
 print(f"    Lower Bound: {lower_bound:.5f}")
 print(f"    Upper Bound: {upper_bound:.5f}")
 print(f"    Mean VaR:    {mean_var:.5f}")
 
-# ----------------------------
-#       VaR Overshootings
-# ----------------------------
-
-# Backtesting
 notional = 10000000
 n_days = len(df_portfolio_returns)
 expected_exceptions = int((1 - confidence_level) * n_days)
 actual_exceptions = (df_portfolio_returns['Return'] * notional < -VaR * notional).sum()
 
-# Binomial test plot
 x = np.arange(0, 2 * expected_exceptions + 20)
 pmf = binom.pmf(x, n_days, 1 - confidence_level)
 
@@ -1329,10 +1139,6 @@ plt.grid(True)
 plt.tight_layout()
 plt.show()
 
-# -------------------------------
-#           KUPIEC TEST
-# -------------------------------
-
 N = 5014
 x = 22
 p = 0.01
@@ -1343,37 +1149,24 @@ p_value = 1 - chi2.cdf(LR_uc, df=1)
 
 print(f"Kupiec LR: {LR_uc:.2f}, p-value: {p_value:.4f}")
 
-# ---------------------------------------------------------
-#      MONTE CARLO SIM VAR COMPUTATION - 250 DAY WINDOW
-# ---------------------------------------------------------
-
-# Get the most recent 250 days of data
 df_250d = df.iloc[-250:].copy()
 
-#factors = df.columns.tolist()
-df_250d = df_250d.apply(pd.to_numeric, errors='coerce')  # Convert non-numeric to NaN
-df_250d = df_250d.dropna()  # Drop rows with NaN (from non-numeric values)
+df_250d = df_250d.apply(pd.to_numeric, errors='coerce')
+df_250d = df_250d.dropna()
 
-# Convert percentage yields/spreads to decimal if needed
 df_250d[diff_factors] = df_250d[diff_factors] / 100.0
 
-# Compute returns
 returns_log_250d = np.log(df_250d[log_return_factors] / df_250d[log_return_factors].shift(1))
 returns_diff_250d = df_250d[diff_factors].diff()
 
-# Combine and drop any NaNs
 returns_250d = pd.concat([returns_log_250d, returns_diff_250d], axis=1).dropna()
 
-# Drop rows with any non-finite values in the returns data
 returns_clean_250d = returns_250d.replace([np.inf, -np.inf], np.nan).dropna()
 
-# Confirm all data is finite
 assert np.isfinite(returns_clean_250d.values).all(), "Still contains non-finite values"
 
-# Fit Marginals
 u_data_250d, marginals_250d = fit_marginals(returns_clean_250d)
 
-# Verify that all factors in log_return_factors and diff_factors are present in returns_clean_250d
 missing_log_factors_250d = [f for f in log_return_factors if f not in returns_clean_250d.columns]
 missing_diff_factors_250d = [f for f in diff_factors if f not in returns_clean_250d.columns]
 
@@ -1384,22 +1177,17 @@ if missing_log_factors_250d or missing_diff_factors_250d:
     if missing_diff_factors_250d:
         print(f"  Missing diff factors: {missing_diff_factors_250d}")
 
-# Ensure float type and valid [0, 1] range
 u_data_250d = u_data_250d.astype(float)
 u_data_250d = u_data_250d.clip(1e-6, 1 - 1e-6)
 assert np.all((u_data_250d >= 0) & (u_data_250d <= 1)), "u_data_250d must contain values in [0,1]"
 
-# Pseudo-observations
 norm_data_250d = norm.ppf(u_data_250d)
 cov_matrix_250d = np.cov(norm_data_250d.T)
 
-# Convert to correlation matrix
 std_devs_250d = np.sqrt(np.diag(cov_matrix_250d))
 corr_matrix_250d = cov_matrix_250d / np.outer(std_devs_250d, std_devs_250d)
 corr_matrix_250d = regularize_corr_matrix(corr_matrix_250d)
 
-
-# Ensure diagonals are exactly 1
 np.fill_diagonal(corr_matrix_250d, 1.0)
 
 ll_g_250d, aic_g_250d = copula_log_likelihood("gaussian", u_data_250d, corr_matrix_250d)
@@ -1408,17 +1196,13 @@ ll_t_250d, aic_t_250d = copula_log_likelihood("t", u_data_250d, corr_matrix_250d
 print(f"\nGaussian Copula: Log-likelihood = {ll_g_250d:.2f}, AIC = {aic_g_250d:.2f}")
 print(f"Student's t Copula: Log-likelihood = {ll_t_250d:.2f}, AIC = {aic_t_250d:.2f}")
 
-# Choose better copula
 chosen_copula_250d = "t" if aic_t_250d < aic_g_250d else "gaussian"
 print(f"\n✅ Selected Copula: {chosen_copula_250d.upper()}")
 
-# Reconvert returns to levels
 current_levels_250d = df_250d.iloc[-1].to_dict()
 
-# Simulation and VaR calculation
 n_simulations_250d = 3000
 
-# Set random seed for reproducibility of 250-day window simulations
 np.random.seed(42)
 
 if chosen_copula_250d == 't':
@@ -1435,64 +1219,72 @@ elif chosen_copula_250d == 'gaussian':
         print(f"Error in Gaussian copula simulation (250d window): {e}")
         print("Reducing ridge parameter and retrying...")
         u_sim_250d = simulate_gaussian_copula(u_data_250d, n_simulations_250d, ridge=1e-4)
+
 sim_returns_250d = u_to_returns(u_sim_250d, marginals_250d)
-# Clip simulated additive returns (diff_factors) to realistic changes
+
 for col in diff_factors:
     if col in sim_returns_250d.columns:
-        sim_returns_250d[col] = sim_returns_250d[col].clip(lower=-0.01, upper=0.01)  # e.g., ±1% change per day
-sim_levels_250d = returns_to_levels(sim_returns_250d, current_levels_250d, log_return_factors=log_return_factors,
-    diff_factors=diff_factors,
-    clip_bounds=(1e-4, 1e4),  # adjust if needed
-    verbose=False)
+        sim_returns_250d[col] = sim_returns_250d[col].clip(lower=-0.01, upper=0.01)
+
+sim_levels_250d = returns_to_levels(sim_returns_250d, current_levels_250d, 
+                                  log_return_factors=log_return_factors,
+                                  diff_factors=diff_factors,
+                                  clip_bounds=(1e-4, 1e4),
+                                  verbose=False)
+
 values_250d = revalue(sim_levels_250d)
 V0_250d = price_portfolio(current_levels_250d)
 pnl_250d = (values_250d - V0_250d) / V0_250d
-# Remove non-finite PnL values
+
 pnl_250d = pnl_250d[np.isfinite(pnl_250d)]
 VaR_250d = -np.percentile(pnl_250d, (1 - confidence_level) * 100)
 
-# Final result Day T+1
 print(f"\n✅ Final 1 Day VaR @ {int(confidence_level*100)}% = {VaR_250d:.4%} using {n_simulations_250d} simulations.")
 
-# Define a main function to run the entire analysis
 def main():
-    global df, df1  # Make variables accessible within pricing function
+    global df, df1
     
-    # Set random seed for reproducibility
     np.random.seed(42)
     
-    # Load Data
     try:
-        # Use relative paths for better portability
-        df = pd.read_csv("data_restructured.csv", parse_dates=["date"], index_col="date")
-        df1 = df.copy()
-        factors = df.columns.tolist()
-        df = df.apply(pd.to_numeric, errors='coerce')  # Convert non-numeric to NaN
-        df = df.dropna()  # Drop rows with NaN (from non-numeric values)
+        df_response = load_data(DATA_URL)
+        if df_response is not None:
+            df = df_response.copy()
+            # Print the first few dates to debug
+            print("First few date values:", df['date'].head(10).tolist())
+            # Use format='mixed' to handle mixed date formats, with errors='coerce' to handle parsing errors
+            df['date'] = pd.to_datetime(df['date'], format='mixed', dayfirst=True, errors='coerce')
+            # Drop rows with invalid dates
+            df = df.dropna(subset=['date'])
+            df = df.set_index('date')
+            df1 = df.copy()
+            factors = df.columns.tolist()
+            df = df.apply(pd.to_numeric, errors='coerce')
+            df = df.dropna()
+        else:
+            raise ValueError("Failed to load data from GitHub")
         
-        # Verify data is available before proceeding
         if len(df) == 0:
             raise ValueError("No data available in dataframe. Please check data file.")
         
-        # Portfolio Returns
-        df_portfolio_returns = pd.read_csv("portfolio_results/portfolio_returns_history.csv")
-        df_portfolio_returns['Date'] = pd.to_datetime(df_portfolio_returns['Date'])
-        df_portfolio_returns_250d = df_portfolio_returns.iloc[-250:]
-    except FileNotFoundError as e:
-        print(f"Error: Could not find data file. {e}")
-        print("Please ensure data files are in the correct location.")
-        raise
+        df_portfolio_returns_response = load_data(PORTFOLIO_RETURNS_URL)
+        if df_portfolio_returns_response is not None:
+            df_portfolio_returns = df_portfolio_returns_response.copy()
+            # Print the first few dates to debug
+            print("First few portfolio return dates:", df_portfolio_returns['Date'].head(10).tolist())
+            # Use format='mixed' for portfolio returns as well
+            df_portfolio_returns['Date'] = pd.to_datetime(df_portfolio_returns['Date'], format='mixed', dayfirst=True, errors='coerce')
+            # Drop rows with invalid dates
+            df_portfolio_returns = df_portfolio_returns.dropna(subset=['Date'])
+            df_portfolio_returns_250d = df_portfolio_returns.iloc[-250:]
+        else:
+            raise ValueError("Failed to load portfolio returns data from GitHub")
     except Exception as e:
         print(f"Error loading or processing data: {e}")
         raise
-    
-    # Rest of the analysis code...
-    # [Continue with the full analysis as in the original script]
-    # ...
 
     print("\n✅ Analysis completed successfully.")
     
-# Call the main function when the script is run directly
 if __name__ == "__main__":
     try:
         main()
