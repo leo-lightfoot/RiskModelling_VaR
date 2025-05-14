@@ -3,21 +3,15 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from scipy.stats import t, norm, multivariate_normal, multivariate_t, binom, chi2, rankdata, logistic, laplace
 from sklearn.covariance import EmpiricalCovariance
-import requests
-from io import StringIO
 from datetime import datetime, timedelta
 
-DATA_URL = "https://raw.githubusercontent.com/leo-lightfoot/RiskModelling_VaR/main/data_restructured.csv"
-PORTFOLIO_RETURNS_URL = "https://raw.githubusercontent.com/leo-lightfoot/RiskModelling_VaR/main/portfolio_results/portfolio_returns_history.csv"
-PORTFOLIO_NAV_URL = "https://raw.githubusercontent.com/leo-lightfoot/RiskModelling_VaR/main/portfolio_results/portfolio_nav_history.csv"
+DATA_URL = r"https://raw.githubusercontent.com/leo-lightfoot/RiskModelling_VaR/refs/heads/main/data_restructured.csv"
+PORTFOLIO_RETURNS_URL = r"https://raw.githubusercontent.com/leo-lightfoot/RiskModelling_VaR/refs/heads/main/portfolio_results/portfolio_returns_history.csv"
+PORTFOLIO_NAV_URL = r"https://raw.githubusercontent.com/leo-lightfoot/RiskModelling_VaR/refs/heads/main/portfolio_results/portfolio_nav_history.csv"
 
 def load_data(url):
-    response = requests.get(url)
-    if response.status_code == 200:
-        return pd.read_csv(StringIO(response.text))
-    else:
-        print(f"Failed to download data: HTTP {response.status_code}")
-        return None
+    """Simple function to load data with parse_dates"""
+    return pd.read_csv(url, parse_dates=['date' if 'data_restructured' in url else 'Date'])
 
 # -----------------------------------------
 #  SIMPLIFIED PRICING FUNCTIONS FOR MC VaR
@@ -931,12 +925,7 @@ try:
     df_response = load_data(DATA_URL)
     if df_response is not None:
         df = df_response.copy()
-        # Print the first few dates to debug
-        print("First few date values:", df['date'].head(10).tolist())
-        # Use format='mixed' to handle mixed date formats, with errors='coerce' to handle parsing errors
-        df['date'] = pd.to_datetime(df['date'], format='mixed', dayfirst=True, errors='coerce')
-        # Drop rows with invalid dates
-        df = df.dropna(subset=['date'])
+        # Set date as index
         df = df.set_index('date')
         df1 = df.copy()
         factors = df.columns.tolist()
@@ -951,12 +940,6 @@ try:
     df_portfolio_returns_response = load_data(PORTFOLIO_RETURNS_URL)
     if df_portfolio_returns_response is not None:
         df_portfolio_returns = df_portfolio_returns_response.copy()
-        # Print the first few dates to debug
-        print("First few portfolio return dates:", df_portfolio_returns['Date'].head(10).tolist())
-        # Use format='mixed' for portfolio returns as well
-        df_portfolio_returns['Date'] = pd.to_datetime(df_portfolio_returns['Date'], format='mixed', dayfirst=True, errors='coerce')
-        # Drop rows with invalid dates
-        df_portfolio_returns = df_portfolio_returns.dropna(subset=['Date'])
         df_portfolio_returns_250d = df_portfolio_returns.iloc[-250:]
     else:
         raise ValueError("Failed to load portfolio returns data from GitHub")
@@ -1250,12 +1233,7 @@ def main():
         df_response = load_data(DATA_URL)
         if df_response is not None:
             df = df_response.copy()
-            # Print the first few dates to debug
-            print("First few date values:", df['date'].head(10).tolist())
-            # Use format='mixed' to handle mixed date formats, with errors='coerce' to handle parsing errors
-            df['date'] = pd.to_datetime(df['date'], format='mixed', dayfirst=True, errors='coerce')
-            # Drop rows with invalid dates
-            df = df.dropna(subset=['date'])
+            # Set date as index
             df = df.set_index('date')
             df1 = df.copy()
             factors = df.columns.tolist()
@@ -1270,12 +1248,6 @@ def main():
         df_portfolio_returns_response = load_data(PORTFOLIO_RETURNS_URL)
         if df_portfolio_returns_response is not None:
             df_portfolio_returns = df_portfolio_returns_response.copy()
-            # Print the first few dates to debug
-            print("First few portfolio return dates:", df_portfolio_returns['Date'].head(10).tolist())
-            # Use format='mixed' for portfolio returns as well
-            df_portfolio_returns['Date'] = pd.to_datetime(df_portfolio_returns['Date'], format='mixed', dayfirst=True, errors='coerce')
-            # Drop rows with invalid dates
-            df_portfolio_returns = df_portfolio_returns.dropna(subset=['Date'])
             df_portfolio_returns_250d = df_portfolio_returns.iloc[-250:]
         else:
             raise ValueError("Failed to load portfolio returns data from GitHub")

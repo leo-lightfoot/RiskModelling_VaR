@@ -2,27 +2,16 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import scipy.stats as stats
-import requests
-from io import StringIO
 
-RETURNS_URL = "https://raw.githubusercontent.com/leo-lightfoot/RiskModelling_VaR/main/portfolio_results/portfolio_returns_history.csv"
-NAV_URL = "https://raw.githubusercontent.com/leo-lightfoot/RiskModelling_VaR/main/portfolio_results/portfolio_nav_history.csv"
+# Load data directly using simplified approach
+RETURNS_URL = r"https://raw.githubusercontent.com/leo-lightfoot/RiskModelling_VaR/refs/heads/main/portfolio_results/portfolio_returns_history.csv"
+NAV_URL = r"https://raw.githubusercontent.com/leo-lightfoot/RiskModelling_VaR/refs/heads/main/portfolio_results/portfolio_nav_history.csv"
 CONFIDENCE_LEVEL = 0.99
 NOTIONAL = 10_000_000
 WINDOW = 250
 
-def load_data(url):
-    response = requests.get(url)
-    if response.status_code == 200:
-        df = pd.read_csv(StringIO(response.text))
-        df['Date'] = pd.to_datetime(df['Date'])
-        return df
-    else:
-        print(f"Failed to download data: HTTP {response.status_code}")
-        return None
-
-returns_df = load_data(RETURNS_URL)
-nav_df = load_data(NAV_URL)
+returns_df = pd.read_csv(RETURNS_URL, parse_dates=['Date'])
+nav_df = pd.read_csv(NAV_URL, parse_dates=['Date'])
 
 df = pd.merge(returns_df, nav_df, on='Date', how='inner')
 df.set_index('Date', inplace=True)

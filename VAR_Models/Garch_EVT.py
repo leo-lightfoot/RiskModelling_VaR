@@ -6,22 +6,16 @@ import scipy.stats as stats
 from scipy.optimize import minimize
 import warnings
 import argparse
-import requests
-from io import StringIO
 
-PORTFOLIO_RETURNS_URL = "https://raw.githubusercontent.com/leo-lightfoot/RiskModelling_VaR/main/portfolio_results/portfolio_returns_history.csv"
+PORTFOLIO_RETURNS_URL = r"https://raw.githubusercontent.com/leo-lightfoot/RiskModelling_VaR/refs/heads/main/portfolio_results/portfolio_returns_history.csv"
 COLUMN_NAME = "Return"
 WINDOW_LENGTHS = [500]
 ALPHA = 0.01
 NOTIONAL = 10000000
 
 def load_data(url):
-    response = requests.get(url)
-    if response.status_code == 200:
-        return pd.read_csv(StringIO(response.text))
-    else:
-        print(f"Failed to download data: HTTP {response.status_code}")
-        return None
+    """Simple function to load data with parse_dates"""
+    return pd.read_csv(url, parse_dates=['Date'])
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description='Calculate Value at Risk using GARCH+EVT')
@@ -202,7 +196,25 @@ def print_results(results):
     
     for method, count in violations.items():
         status = "ACCEPTED" if bounds['lower'] <= count <= bounds['upper'] else "REJECTED"
+        lr_stat, p_val = kupiec_pof_test(count, n_returns, ALPHA)
         print(f"  {method}: {count} ({count/n_returns*100:.2f}%) - {status}")
+        print(f"     → Kupiec POF: LR = {lr_stat:.2f}, p = {p_val:.4f}")
+
+def kupiec_pof_test(violations, total_obs, alpha):
+    """
+    Kupiec Proportion of Failures (POF) Test
+    H0: The proportion of violations equals alpha
+    """
+    pi = violations / total_obs
+    if pi == 0 or pi == 1:
+        return np.nan, 1.0  # Avoid log(0) issues
+    
+    log_likelihood_null = total_obs * np.log(1 - alpha) + violations * np.log(alpha / (1 - alpha))
+    log_likelihood_alt = (violations * np.log(pi) + 
+                          (total_obs - violations) * np.log(1 - pi))
+    LR_pof = -2 * (log_likelihood_null - log_likelihood_alt)
+    p_value = 1 - stats.chi2.cdf(LR_pof, df=1)
+    return LR_pof, p_value
 
 # Binomial Test Plot
 from scipy.stats import binom

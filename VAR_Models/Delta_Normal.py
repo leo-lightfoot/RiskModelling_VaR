@@ -2,33 +2,22 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.stats import norm, binom, t
-import requests
-from io import StringIO
 
-PORTFOLIO_NAV_URL = "https://raw.githubusercontent.com/leo-lightfoot/RiskModelling_VaR/main/portfolio_results/portfolio_nav_history.csv"
-PORTFOLIO_RETURNS_URL = "https://raw.githubusercontent.com/leo-lightfoot/RiskModelling_VaR/main/portfolio_results/portfolio_returns_history.csv"
+# Load data directly using simplified approach
+PORTFOLIO_NAV_URL = r"https://raw.githubusercontent.com/leo-lightfoot/RiskModelling_VaR/refs/heads/main/portfolio_results/portfolio_nav_history.csv"
+PORTFOLIO_RETURNS_URL = r"https://raw.githubusercontent.com/leo-lightfoot/RiskModelling_VaR/refs/heads/main/portfolio_results/portfolio_returns_history.csv"
 CONFIDENCE_LEVEL = 0.99
 Z_SCORE = norm.ppf(1 - CONFIDENCE_LEVEL)
 NOTIONAL = 10000000
 DEGREES_FREEDOM = 5
 
-def load_data(url):
-    response = requests.get(url)
-    if response.status_code == 200:
-        return pd.read_csv(StringIO(response.text))
-    else:
-        print(f"Failed to download data: HTTP {response.status_code}")
-        return None
-
-df_NAV = load_data(PORTFOLIO_NAV_URL)
+# Load portfolio data
+df_NAV = pd.read_csv(PORTFOLIO_NAV_URL, parse_dates=['Date'])
 portfolio_NAV = df_NAV[['Date', 'NAV']].copy()
-portfolio_NAV.loc[:, 'Date'] = pd.to_datetime(portfolio_NAV['Date'])
 df_NAV = df_NAV.drop(columns=['NAV'])
-df_NAV['Date'] = pd.to_datetime(df_NAV['Date'])
 df_NAV = df_NAV.set_index('Date')
 
-df_portfolio_returns = load_data(PORTFOLIO_RETURNS_URL)
-df_portfolio_returns['Date'] = pd.to_datetime(df_portfolio_returns['Date'])
+df_portfolio_returns = pd.read_csv(PORTFOLIO_RETURNS_URL, parse_dates=['Date'])
 
 if isinstance(df_portfolio_returns, pd.Series):
     df_portfolio_returns = df_portfolio_returns.to_frame(name="Portfolio")

@@ -6,26 +6,17 @@ from scipy.stats import binom
 from statsmodels.stats.diagnostic import acorr_ljungbox
 from statsmodels.tsa.stattools import adfuller
 import statsmodels.api as sm
-import requests
-from io import StringIO
 
 # Set seed
 np.random.seed(42)
 
-# Updated 20-year dataset URLs
-returns_url = "https://raw.githubusercontent.com/leo-lightfoot/RiskModelling_VaR/main/portfolio_results/portfolio_returns_history.csv"
-nav_url = "https://raw.githubusercontent.com/leo-lightfoot/RiskModelling_VaR/main/portfolio_results/portfolio_nav_history.csv"
+# Load data directly using simplified approach
+returns_url = r"https://raw.githubusercontent.com/leo-lightfoot/RiskModelling_VaR/refs/heads/main/portfolio_results/portfolio_returns_history.csv"
+nav_url = r"https://raw.githubusercontent.com/leo-lightfoot/RiskModelling_VaR/refs/heads/main/portfolio_results/portfolio_nav_history.csv"
 
-response_returns = requests.get(returns_url)
-response_nav = requests.get(nav_url)
-
-if response_returns.status_code == 200 and response_nav.status_code == 200:
-    returns_df = pd.read_csv(StringIO(response_returns.text))
-    nav_df = pd.read_csv(StringIO(response_nav.text))
-    
-    returns_df['Date'] = pd.to_datetime(returns_df['Date'])
-    nav_df['Date'] = pd.to_datetime(nav_df['Date'])
-    df = pd.merge(returns_df, nav_df, on='Date', how='inner').set_index('Date')
+returns_df = pd.read_csv(returns_url, parse_dates=['Date'])
+nav_df = pd.read_csv(nav_url, parse_dates=['Date'])
+df = pd.merge(returns_df, nav_df, on='Date', how='inner').set_index('Date')
 
 # Parameters
 confidence_level = 0.99
