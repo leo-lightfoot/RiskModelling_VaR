@@ -6,13 +6,14 @@ from io import StringIO
 
 DATA_PATH = "https://raw.githubusercontent.com/leo-lightfoot/RiskModelling_VaR/main/data_restructured.csv"
 PORTFOLIO_RETURNS_PATH = "https://raw.githubusercontent.com/leo-lightfoot/RiskModelling_VaR/main/portfolio_results/portfolio_returns_history.csv"
-PORTFOLIO_RESULTS_DIR = "portfolio_results"
+PORTFOLIO_RESULTS_DIR = "Stress_test"
 
 CRISIS_PERIODS = {
     "2008_Financial_Crisis": ("2008-09-01", "2009-03-31"),
     "2012_Euro_Crisis": ("2011-07-01", "2012-07-31"),
     "2018_Tariff_War": ("2018-01-26", "2018-12-24"),
-    "COVID_19_Pandemic": ("2020-02-15", "2020-04-30")
+    "COVID_19_Pandemic": ("2020-02-15", "2020-04-30"),
+    "Russia_Ukraine_War": ("2022-02-24", "2022-06-30")
 }
 
 from Pricing import Portfolio, load_data
@@ -245,7 +246,7 @@ def main():
                 impact = results["impact_scores"].get(factor, "N/A")
                 corr = results["correlations"].get(factor, "N/A")
                 
-                print(f"{i}. {factor}: Impact Score = {impact:.4f}, Correlation = {corr:.4f}, Change = {pct_change}")
+                print(f"{i}. {factor}: Impact Score = {impact:.4f}, Correlation = {corr:.4f}")
     
     print("\nGenerating visualizations...")
     plot_crisis_drawdowns(portfolio_returns, crisis_details)

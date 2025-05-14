@@ -6,9 +6,22 @@ import scipy.stats as stats
 from scipy.optimize import minimize
 import warnings
 import argparse
+import requests
+from io import StringIO
 
-# Suppress all warnings
-warnings.filterwarnings('ignore')
+PORTFOLIO_RETURNS_URL = "https://raw.githubusercontent.com/leo-lightfoot/RiskModelling_VaR/main/portfolio_results/portfolio_returns_history.csv"
+COLUMN_NAME = "Return"
+WINDOW_LENGTHS = [500]
+ALPHA = 0.01
+NOTIONAL = 10000000
+
+def load_data(url):
+    response = requests.get(url)
+    if response.status_code == 200:
+        return pd.read_csv(StringIO(response.text))
+    else:
+        print(f"Failed to download data: HTTP {response.status_code}")
+        return None
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description='Calculate Value at Risk using GARCH+EVT')
@@ -57,7 +70,6 @@ def calculate_var(returns, window_length=250, alpha=0.01):
     # Initialize storage for VaR estimates
     var_garch_evt = np.zeros(n - window_length)
     var_garch_t = np.zeros(n - window_length)
-    #var_hist_sim = np.zeros(n - window_length)
     
     # For storing GARCH model residuals
     all_residuals = []
@@ -67,9 +79,19 @@ def calculate_var(returns, window_length=250, alpha=0.01):
         # Extract window data
         window_data = returns[t-window_length:t].copy()
         
-        # Fit GARCH model
-        model = arch_model(window_data, vol='GARCH', p=1, q=1, dist='studentsT')
-        model_fit = model.fit(disp='off')
+        # Try with different optimizers if one fails
+        try:
+            model = arch_model(window_data, vol='GARCH', p=1, q=1, dist='studentsT')
+            model_fit = model.fit(disp='off', show_warning=False)
+        except:
+            try:
+                # Try with a different optimizer
+                model = arch_model(window_data, vol='GARCH', p=1, q=1, dist='studentsT')
+                model_fit = model.fit(disp='off', options={'maxiter': 1000}, show_warning=False)
+            except:
+                # Fallback to normal distribution if t-dist fails
+                model = arch_model(window_data, vol='GARCH', p=1, q=1, dist='normal')
+                model_fit = model.fit(disp='off', show_warning=False)
         
         # Store model results
         residuals = model_fit.resid
@@ -79,8 +101,6 @@ def calculate_var(returns, window_length=250, alpha=0.01):
         forecast = model_fit.forecast(horizon=1)
         conditional_vol = np.sqrt(forecast.variance.iloc[-1, 0])
         
-        # Historical simulation VaR
-        #var_hist_sim[t-window_length] = np.percentile(window_data, alpha*100)
         
         # GARCH with Student's t VaR
         dof = model_fit.params['nu']  # degrees of freedom for Student's t
@@ -114,7 +134,6 @@ def calculate_var(returns, window_length=250, alpha=0.01):
     actual_returns = returns[window_length:]
     violations_garch_evt = np.sum(actual_returns < var_garch_evt)
     violations_garch_t = np.sum(actual_returns < var_garch_t)
-    #violations_hist_sim = np.sum(actual_returns < var_hist_sim)
     
     # Calculate binomial test bounds
     lower_bound = stats.binom.ppf(0.025, len(actual_returns), alpha)
@@ -125,7 +144,6 @@ def calculate_var(returns, window_length=250, alpha=0.01):
         'violations': {
             'GARCH+EVT': violations_garch_evt,
             'GARCH+t': violations_garch_t,
-           # 'HistSim': violations_hist_sim
         },
         'bounds': {
             'lower': lower_bound,
@@ -134,7 +152,6 @@ def calculate_var(returns, window_length=250, alpha=0.01):
         'var_estimates': {
             'GARCH+EVT': var_garch_evt,
             'GARCH+t': var_garch_t,
-            #'HistSim': var_hist_sim
         },
         'actual_returns': actual_returns
     }
@@ -179,7 +196,7 @@ def print_results(results):
     
     print("\n==== VaR Backtest Results ====")
     print(f"Total observations: {n_returns}")
-    print(f"Expected violations at {alpha*100:.2f}% VaR: {alpha * n_returns:.1f}")
+    print(f"Expected violations at {ALPHA*100:.2f}% VaR: {ALPHA * n_returns:.1f}")
     print(f"Acceptance region: [{bounds['lower']:.1f}, {bounds['upper']:.1f}]")
     print("\nNumber of violations:")
     
@@ -229,35 +246,30 @@ def plot_evt_pnl_distribution(actual_returns, var_series, alpha=0.01, scale=1e7)
     plt.savefig("evt_pnl_distribution.png", dpi=300)
     plt.show() 
 
+# warning suppression 
+from arch.utility.exceptions import ConvergenceWarning
+warnings.simplefilter('ignore', ConvergenceWarning)
+warnings.simplefilter('ignore', UserWarning)
+warnings.simplefilter('ignore', RuntimeWarning)
+warnings.filterwarnings('ignore')
 
 
 if __name__ == "__main__":
     args = parse_arguments()
     
-    # Hardcoded parameters
-    file_path = "Portfolio/portfolio_results/portfolio_returns_history.csv"
-    column_name = "Return"
-    window_lengths = [500]
-    alpha = 0.01
+    print(f"Loading data from {PORTFOLIO_RETURNS_URL}...")
+    df = load_data(PORTFOLIO_RETURNS_URL)
     
-    # Load data
-    print(f"Loading data from {file_path}...")
-    df = pd.read_csv(file_path)
+    if COLUMN_NAME not in df.columns:
+        raise ValueError(f"Column '{COLUMN_NAME}' not found in CSV file")
+    returns = df[COLUMN_NAME].values
     
-    # Select column with returns
-    if column_name not in df.columns:
-        raise ValueError(f"Column '{column_name}' not found in CSV file")
-    returns = df[column_name].values
-    
-    # Run analysis for each window length
-    for window_length in window_lengths:
-        print(f"\nCalculating VaR with window length = {window_length}, alpha = {alpha}...")
-        results = calculate_var(returns, window_length, alpha)
+    for window_length in WINDOW_LENGTHS:
+        print(f"\nCalculating VaR with window length = {window_length}, alpha = {ALPHA}...")
+        results = calculate_var(returns, window_length, ALPHA)
         
-        # Print and plot results
         print_results(results)
-        plot_results(results) 
-
-        plot_binomial_test(results, alpha)
-        plot_evt_pnl_distribution(results['actual_returns'], results['var_estimates']['GARCH+EVT'], alpha)
+        plot_results(results)
+        plot_binomial_test(results, ALPHA)
+        plot_evt_pnl_distribution(results['actual_returns'], results['var_estimates']['GARCH+EVT'], ALPHA)
        
